@@ -60,3 +60,38 @@ jobs:
             git --no-pager diff
             exit 1
           fi
+
+  images:
+    name: Build container images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Verify the operator image builds (UBI9 go-toolset builder + ubi-minimal
+      # runtime). Not pushed.
+      - name: Build operator image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: false
+          tags: palworld-operator:ci
+          cache-from: type=gha,scope=operator
+          cache-to: type=gha,mode=max,scope=operator
+
+      # Verify the game server image builds (UBI9 + SteamCMD + static tini/rclone).
+      # The context is the build dir so the COPYed scripts resolve. Not pushed.
+      - name: Build game server image
+        uses: docker/build-push-action@v6
+        with:
+          context: build/palworld-server
+          file: build/palworld-server/Dockerfile
+          platforms: linux/amd64
+          push: false
+          tags: palworld-server:ci
+          cache-from: type=gha,scope=server
+          cache-to: type=gha,mode=max,scope=server
