@@ -1,0 +1,38 @@
+# Adds namespace to all resources.
+namespace: palworld-operator-system
+
+# Value of this field is prepended to the
+# names of all resources, e.g. a deployment named
+# "wordpress" becomes "alices-wordpress".
+namePrefix: palworld-operator-
+
+# Labels to add to all resources and selectors.
+#labels:
+#- includeSelectors: true
+#  pairs:
+#    someName: someValue
+
+resources:
+- ../crd
+- ../rbac
+- ../manager
+- metrics_service.yaml
+# [PROMETHEUS] To enable a ServiceMonitor for the operator's own metrics on
+# clusters running the Prometheus Operator, uncomment the next line.
+#- ../prometheus
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Keep the metrics-exporter sidecar image in sync with the operator image.
+replacements:
+- source:
+    kind: Deployment
+    name: controller-manager
+    fieldPath: spec.template.spec.containers.[name=manager].image
+  targets:
+  - select:
+      kind: Deployment
+      name: controller-manager
+    fieldPaths:
+    - spec.template.spec.containers.[name=manager].env.[name=OPERATOR_IMAGE].value

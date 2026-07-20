@@ -1,0 +1,7 @@
+## Append samples of your project ##
+resources:
+- palworld_v1alpha1_palworldgame.yaml
+- palworld_v1alpha1_palworldgame_minimal.yaml
+- palworld_v1alpha1_palworldbackup.yaml
+- palworld_v1alpha1_palworldrestore.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

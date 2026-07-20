@@ -1,0 +1,9 @@
+apiVersion: palworld.twodcube.io/v1alpha1
+kind: PalworldBackup
+metadata:
+  name: palworldgame-sample-manual-backup
+spec:
+  gameRef: palworldgame-sample
+  flushSave: true
+  destination:
+    type: VolumeSnapshot

@@ -1,0 +1,39 @@
+# A PalworldGame that backs up to S3-compatible object storage (e.g. ODF/NooBaa,
+# AWS S3, MinIO) and exposes the REST admin API through an OpenShift Route.
+apiVersion: palworld.twodcube.io/v1alpha1
+kind: PalworldGame
+metadata:
+  name: palworld-s3
+spec:
+  serverSettings:
+    serverName: "S3-backed Palworld Server"
+    serverPlayerMaxNum: 16
+  storage:
+    size: 30Gi
+  networking:
+    serviceType: LoadBalancer
+    restAPI:
+      route: true
+      tls: edge
+  backup:
+    enabled: true
+    schedule: "0 3 * * *"
+    retention: 14
+    onDelete: true
+    destination:
+      type: S3
+      s3:
+        bucket: palworld-backups
+        prefix: production
+        endpoint: https://s3.openshift-storage.svc:443
+        region: us-east-1
+        credentialsSecret: palworld-s3-credentials
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: palworld-s3-credentials
+type: Opaque
+stringData:
+  AWS_ACCESS_KEY_ID: REPLACE_ME
+  AWS_SECRET_ACCESS_KEY: REPLACE_ME

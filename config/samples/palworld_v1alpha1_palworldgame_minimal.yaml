@@ -1,0 +1,9 @@
+apiVersion: palworld.twodcube.io/v1alpha1
+kind: PalworldGame
+metadata:
+  name: palworld-minimal
+spec:
+  # Everything else uses production-sane defaults. The operator generates a
+  # random admin password Secret automatically.
+  serverSettings:
+    serverName: "Minimal Palworld Server"
