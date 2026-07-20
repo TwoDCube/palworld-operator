@@ -101,18 +101,20 @@ rules:
 - apiGroups:
   - palworld.twodcube.io
   resources:
+  - palworldbackups/finalizers
+  - palworldgames/finalizers
+  - palworldrestores/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - palworld.twodcube.io
+  resources:
   - palworldbackups/status
   - palworldgames/status
   - palworldrestores/status
   verbs:
   - get
   - patch
-  - update
-- apiGroups:
-  - palworld.twodcube.io
-  resources:
-  - palworldgames/finalizers
-  verbs:
   - update
 - apiGroups:
   - policy

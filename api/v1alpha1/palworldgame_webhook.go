@@ -122,6 +122,12 @@ func (v *PalworldGameValidator) validate(game *PalworldGame) (admission.Warnings
 	// Networking sanity checks.
 	if game.Spec.Networking.RESTAPI.Route {
 		warnings = append(warnings, "spec.networking.restAPI.route only takes effect on clusters with the OpenShift Route API")
+		warnings = append(warnings, "enabling the REST API Route publishes the password-protected admin API on the external router")
+		if tls := game.Spec.Networking.RESTAPI.TLS; tls == "reencrypt" || tls == "passthrough" {
+			errs = append(errs, field.Invalid(
+				specPath.Child("networking", "restAPI", "tls"), tls,
+				"the REST API is served as plain HTTP; only 'edge' termination is supported"))
+		}
 	}
 	if game.Spec.Networking.ServiceType == ServiceTypeLoadBalancer {
 		warnings = append(warnings, "spec.networking.serviceType=LoadBalancer requires a UDP-capable load balancer (e.g. MetalLB on-prem)")

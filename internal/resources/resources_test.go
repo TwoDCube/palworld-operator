@@ -17,6 +17,7 @@ limitations under the License.
 package resources
 
 import (
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -127,6 +128,33 @@ func TestConfigMapRendersSettings(t *testing.T) {
 	}
 	if got := cm.Name; got != "srv-config" {
 		t.Errorf("configmap name: want srv-config, got %s", got)
+	}
+}
+
+func TestReservedLabelsWinOverPodLabels(t *testing.T) {
+	g := testGame()
+	g.Spec.PodLabels = map[string]string{
+		labelInstance: "attacker", // must not override the identity label
+		"team":        "red",      // custom labels are preserved
+	}
+	l := CommonLabels(g)
+	if l[labelInstance] != g.Name {
+		t.Errorf("reserved instance label was overridden by PodLabels: %q", l[labelInstance])
+	}
+	if l["team"] != "red" {
+		t.Errorf("custom PodLabel was dropped")
+	}
+}
+
+func TestRenderEngineININestedSection(t *testing.T) {
+	out := renderEngineINI(map[string]string{
+		"/Script/OnlineSubsystemUtils.IpNetDriver/NetServerMaxTickRate": "120",
+	})
+	if !strings.Contains(out, "[/Script/OnlineSubsystemUtils.IpNetDriver]") {
+		t.Errorf("section name with slashes was mangled:\n%s", out)
+	}
+	if !strings.Contains(out, "NetServerMaxTickRate=120") {
+		t.Errorf("key/value missing:\n%s", out)
 	}
 }
 

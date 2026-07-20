@@ -121,11 +121,20 @@ render_settings() {
     log "rendering ${CONFIG_DIR}/PalWorldSettings.ini"
     local content
     content="$(cat "${SETTINGS_SOURCE}")"
-    # Literal (non-regex) substitution of secret placeholders.
-    content="${content//__PALWORLD_ADMIN_PASSWORD__/${ADMIN_PASSWORD}}"
-    content="${content//__PALWORLD_SERVER_PASSWORD__/${SERVER_PASSWORD}}"
-    content="${content//__PALWORLD_RCON_PASSWORD__/${RCON_PASSWORD}}"
-    content="${content//__PALWORLD_PUBLIC_IP__/${PUBLIC_IP}}"
+    # Literal substitution of secret placeholders. In bash's ${var//pat/repl}
+    # the replacement string is NOT fully literal: a backslash escapes and (bash
+    # 5.2+) a bare '&' expands to the matched text. Escape both so passwords
+    # containing '&' or '\' round-trip unchanged.
+    subst() {
+        local token="$1" value="$2"
+        value="${value//\\/\\\\}"
+        value="${value//&/\\&}"
+        content="${content//${token}/${value}}"
+    }
+    subst "__PALWORLD_ADMIN_PASSWORD__" "${ADMIN_PASSWORD}"
+    subst "__PALWORLD_SERVER_PASSWORD__" "${SERVER_PASSWORD}"
+    subst "__PALWORLD_RCON_PASSWORD__" "${RCON_PASSWORD}"
+    subst "__PALWORLD_PUBLIC_IP__" "${PUBLIC_IP}"
     umask 0002
     printf '%s\n' "${content}" > "${CONFIG_DIR}/PalWorldSettings.ini"
     if [ -f "${ENGINE_SOURCE}" ]; then
@@ -135,17 +144,17 @@ render_settings() {
 render_settings
 
 # --- 4. Launch the server -----------------------------------------------------
+# Base args. The settings file drives the server name by default; a -servername
+# override is appended only when PALWORLD_SERVER_NAME is set (as a single array
+# element, so embedded spaces are preserved without shell-quoting hacks).
 ARGS=(
     "-port=${GAME_PORT}"
     "-queryport=${QUERY_PORT}"
     "-players=${MAX_PLAYERS}"
-    "-servername=\"${PALWORLD_SERVER_NAME:-}\""
     "-log"
-    "-nosteam"
 )
-# Remove empty servername arg (settings file drives the name).
-if [ -z "${PALWORLD_SERVER_NAME:-}" ]; then
-    ARGS=("-port=${GAME_PORT}" "-queryport=${QUERY_PORT}" "-players=${MAX_PLAYERS}" "-log")
+if [ -n "${PALWORLD_SERVER_NAME:-}" ]; then
+    ARGS+=("-servername=${PALWORLD_SERVER_NAME}")
 fi
 if [ "${RCON_ENABLED}" = "true" ]; then
     ARGS+=("-RCONEnabled=True" "-RCONPort=${RCON_PORT}")

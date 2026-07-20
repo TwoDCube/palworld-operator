@@ -101,9 +101,10 @@ func (r *PalworldGameReconciler) observeLive(ctx context.Context, game *palworld
 
 	if info, err := rc.Info(ctx); err == nil {
 		game.Status.ServerName = info.ServerName
-		if game.Status.CurrentVersion == "" {
-			game.Status.CurrentVersion = info.Version
-		}
+		// The in-game version string lives in its own field so it never
+		// pollutes CurrentVersion, which the update controller manages as a
+		// Steam build id.
+		game.Status.ServerVersion = info.Version
 	}
 	if metrics, err := rc.Metrics(ctx); err == nil {
 		game.Status.PlayersOnline = metrics.CurrentPlayerNum

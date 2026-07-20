@@ -54,12 +54,14 @@ func renderEngineINI(engine map[string]string) string {
 	}
 	sections := map[string][]string{}
 	for k, v := range engine {
-		parts := strings.SplitN(k, "/", 2)
+		// Keys are "Section/Key" where Section is an Unreal section name that
+		// itself contains slashes (e.g. "/Script/Engine.Engine"). Split on the
+		// LAST slash so only the trailing token is the key.
 		section := "/Script/Engine.Engine"
 		key := k
-		if len(parts) == 2 {
-			section = parts[0]
-			key = parts[1]
+		if idx := strings.LastIndex(k, "/"); idx > 0 {
+			section = k[:idx]
+			key = k[idx+1:]
 		}
 		sections[section] = append(sections[section], fmt.Sprintf("%s=%s", key, v))
 	}

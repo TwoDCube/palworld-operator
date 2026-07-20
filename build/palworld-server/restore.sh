@@ -8,6 +8,10 @@
 #   restore.sh s3                stream+extract a tar.gz from an S3 remote
 #
 # Env: same as backup.sh, plus DATA_DIR as the restore target.
+#
+# Safety: the archive is extracted into a staging directory FIRST; the live
+# world is only cleared and replaced once extraction has fully succeeded, so a
+# corrupt or truncated backup never destroys the existing save.
 set -euo pipefail
 
 log() { echo "[restore] $(date -u +%FT%TZ) $*"; }
@@ -15,6 +19,8 @@ log() { echo "[restore] $(date -u +%FT%TZ) $*"; }
 MODE="${1:-}"
 : "${STEAMAPPDIR:=/palworld}"
 : "${DATA_DIR:=${STEAMAPPDIR}/Pal/Saved}"
+
+STAGING="${DATA_DIR}.restore-staging"
 
 configure_rclone() {
     export RCLONE_CONFIG_S3_TYPE=s3
@@ -29,29 +35,38 @@ configure_rclone() {
     fi
 }
 
-prepare_target() {
-    log "clearing restore target ${DATA_DIR}"
+reset_staging() {
+    rm -rf "${STAGING}"
+    mkdir -p "${STAGING}"
+}
+
+# swap_into_place is only reached after a successful extraction into STAGING.
+swap_into_place() {
+    log "extraction succeeded; swapping restored data into ${DATA_DIR}"
     mkdir -p "${DATA_DIR}"
-    # Remove existing contents but keep the directory (it may be a mount point).
     find "${DATA_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+    find "${STAGING}" -mindepth 1 -maxdepth 1 -exec mv -t "${DATA_DIR}" {} +
+    rm -rf "${STAGING}"
 }
 
 case "${MODE}" in
     pvc)
         SRC="${2:?source file required}"
         [ -f "${SRC}" ] || { log "ERROR: source ${SRC} not found"; exit 1; }
-        prepare_target
-        log "extracting ${SRC} -> ${DATA_DIR}"
-        tar -xzf "${SRC}" -C "${DATA_DIR}"
+        reset_staging
+        log "extracting ${SRC} -> ${STAGING}"
+        tar -xzf "${SRC}" -C "${STAGING}"
+        swap_into_place
         ;;
     s3)
         : "${S3_BUCKET:?S3_BUCKET required}"
         : "${S3_KEY:?S3_KEY required}"
         configure_rclone
         REMOTE="s3:${S3_BUCKET}/${S3_PREFIX:+${S3_PREFIX}/}${S3_KEY}"
-        prepare_target
-        log "streaming ${REMOTE} -> ${DATA_DIR}"
-        rclone cat "${REMOTE}" | tar -xzf - -C "${DATA_DIR}"
+        reset_staging
+        log "streaming ${REMOTE} -> ${STAGING}"
+        rclone cat "${REMOTE}" | tar -xzf - -C "${STAGING}"
+        swap_into_place
         ;;
     *)
         log "ERROR: unknown mode '${MODE}' (expected pvc|s3)"

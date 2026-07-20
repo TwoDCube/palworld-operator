@@ -23,7 +23,7 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
-    - jsonPath: .status.currentVersion
+    - jsonPath: .status.serverVersion
       name: Version
       type: string
     - jsonPath: .status.playersOnline
@@ -4245,7 +4245,10 @@ spec:
                   passwords.
                 type: string
               currentVersion:
-                description: CurrentVersion is the Steam build id currently installed/running.
+                description: |-
+                  CurrentVersion is the Steam build id currently installed/running. It is
+                  managed solely by the update controller so it stays comparable with
+                  AvailableVersion (both are Steam build ids).
                 type: string
               gameEndpoint:
                 description: GameEndpoint is the in-cluster/external address for the
@@ -4325,6 +4328,11 @@ spec:
                 type: string
               serverName:
                 description: ServerName is the in-game server name currently applied.
+                type: string
+              serverVersion:
+                description: |-
+                  ServerVersion is the human-readable in-game version reported by the REST
+                  API (e.g. "v0.3.5"). Display only; not used for update comparisons.
                 type: string
             type: object
         type: object

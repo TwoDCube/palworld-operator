@@ -37,20 +37,14 @@ var RouteGVK = schema.GroupVersionKind{
 // Router. Only created when RESTAPI.Route is enabled and the cluster has the
 // Route API.
 func DesiredRoute(g *palworldv1alpha1.PalworldGame) *unstructured.Unstructured {
-	termination := "edge"
+	// The REST API is served as plain HTTP inside the pod, so the only valid
+	// Route termination is edge (router terminates TLS, cleartext to the pod).
+	// reencrypt/passthrough would require the pod to serve TLS and are rejected
+	// by the admission webhook; we hard-code edge here as a defense in depth.
 	tls := map[string]any{
 		"termination":                   "edge",
 		"insecureEdgeTerminationPolicy": "Redirect",
 	}
-	switch g.Spec.Networking.RESTAPI.TLS {
-	case "reencrypt":
-		termination = "reencrypt"
-		tls = map[string]any{"termination": "reencrypt", "insecureEdgeTerminationPolicy": "Redirect"}
-	case "passthrough":
-		termination = "passthrough"
-		tls = map[string]any{"termination": "passthrough"}
-	}
-	_ = termination
 
 	labels := map[string]any{}
 	for k, v := range CommonLabels(g) {

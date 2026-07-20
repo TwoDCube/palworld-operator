@@ -98,11 +98,21 @@ func DesiredNetworkPolicy(g *palworldv1alpha1.PalworldGame, operatorNamespace st
 					},
 				},
 				{
-					// RCON, REST and metrics: same-namespace + operator only.
+					// RCON and REST are admin surfaces: same-namespace + operator
+					// namespace only.
 					From: adminFrom,
 					Ports: []networkingv1.NetworkPolicyPort{
 						{Protocol: &tcp, Port: &rconPort},
 						{Protocol: &tcp, Port: &restPort},
+					},
+				},
+				{
+					// Metrics carry only non-sensitive operational data (player
+					// count, fps) and must be reachable by Prometheus, which
+					// typically lives in a separate namespace whose identity we
+					// cannot know here, so the port is left open. Restrict it
+					// further with your own NetworkPolicy if required.
+					Ports: []networkingv1.NetworkPolicyPort{
 						{Protocol: &tcp, Port: &metricsPort},
 					},
 				},

@@ -102,6 +102,24 @@ func TestValidateScheduledUpdateRequiresSchedule(t *testing.T) {
 	}
 }
 
+func TestValidateRouteReencryptRejected(t *testing.T) {
+	g := game()
+	g.Spec.Networking.RESTAPI.Route = true
+	g.Spec.Networking.RESTAPI.TLS = "reencrypt"
+	if err := validate(t, g); err == nil {
+		t.Errorf("expected error: reencrypt is invalid for the HTTP REST backend")
+	}
+}
+
+func TestValidateRouteEdgeAllowed(t *testing.T) {
+	g := game()
+	g.Spec.Networking.RESTAPI.Route = true
+	g.Spec.Networking.RESTAPI.TLS = "edge"
+	if err := validate(t, g); err != nil {
+		t.Errorf("edge termination should be valid, got: %v", err)
+	}
+}
+
 func TestValidateLoadBalancerWarns(t *testing.T) {
 	g := game()
 	g.Spec.Networking.ServiceType = ServiceTypeLoadBalancer

@@ -152,9 +152,16 @@ type PalworldGameStatus struct {
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// CurrentVersion is the Steam build id currently installed/running.
+	// CurrentVersion is the Steam build id currently installed/running. It is
+	// managed solely by the update controller so it stays comparable with
+	// AvailableVersion (both are Steam build ids).
 	// +optional
 	CurrentVersion string `json:"currentVersion,omitempty"`
+
+	// ServerVersion is the human-readable in-game version reported by the REST
+	// API (e.g. "v0.3.5"). Display only; not used for update comparisons.
+	// +optional
+	ServerVersion string `json:"serverVersion,omitempty"`
 
 	// AvailableVersion is the newest Steam build id detected by the update
 	// poller, when known.
@@ -230,7 +237,7 @@ type PalworldGameStatus struct {
 // +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas,selectorpath=.status.selector
 // +kubebuilder:resource:shortName=pwgame;pwg,categories=palworld
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
-// +kubebuilder:printcolumn:name="Version",type=string,JSONPath=`.status.currentVersion`
+// +kubebuilder:printcolumn:name="Version",type=string,JSONPath=`.status.serverVersion`
 // +kubebuilder:printcolumn:name="Players",type=string,JSONPath=`.status.playersOnline`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`

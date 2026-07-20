@@ -56,6 +56,7 @@ type restorePlan struct {
 
 // +kubebuilder:rbac:groups=palworld.twodcube.io,resources=palworldrestores,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=palworld.twodcube.io,resources=palworldrestores/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=palworld.twodcube.io,resources=palworldrestores/finalizers,verbs=update
 // +kubebuilder:rbac:groups=palworld.twodcube.io,resources=palworldgames,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=palworld.twodcube.io,resources=palworldbackups,verbs=get;list;watch
 
@@ -145,6 +146,12 @@ func (r *PalworldRestoreReconciler) stopGame(ctx context.Context, restore *palwo
 		now := metav1.Now()
 		restore.Status.StartTime = &now
 	}
+	// Remember the pre-restore replica count so we return the game to the state
+	// the user chose (e.g. keep it stopped) rather than always starting it.
+	if restore.Status.OriginalReplicas == nil {
+		orig := resources.DesiredReplicas(game)
+		restore.Status.OriginalReplicas = &orig
+	}
 	if err := r.scaleGame(ctx, game, 0); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -158,6 +165,11 @@ func (r *PalworldRestoreReconciler) awaitStopped(ctx context.Context, restore *p
 	// Wait until the StatefulSet has no running pods before touching the volume.
 	var sts appsv1.StatefulSet
 	err := r.Get(ctx, client.ObjectKey{Name: resources.StatefulSetName(game), Namespace: game.Namespace}, &sts)
+	if err != nil && !apierrors.IsNotFound(err) {
+		// A transient read error must not be mistaken for "server stopped" — that
+		// would let the restore wipe the volume while the pod is still running.
+		return ctrl.Result{}, err
+	}
 	if err == nil && (sts.Status.Replicas > 0 || sts.Status.ReadyReplicas > 0) {
 		return r.requeueRestore(ctx, restore, 5*time.Second)
 	}
@@ -250,7 +262,11 @@ func (r *PalworldRestoreReconciler) awaitSnapshotRestore(ctx context.Context, re
 }
 
 func (r *PalworldRestoreReconciler) startGame(ctx context.Context, restore *palworldv1alpha1.PalworldRestore, game *palworldv1alpha1.PalworldGame) (ctrl.Result, error) {
-	if err := r.scaleGame(ctx, game, 1); err != nil {
+	target := int32(1)
+	if restore.Status.OriginalReplicas != nil {
+		target = *restore.Status.OriginalReplicas
+	}
+	if err := r.scaleGame(ctx, game, target); err != nil {
 		return ctrl.Result{}, err
 	}
 	now := metav1.Now()

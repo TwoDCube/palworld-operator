@@ -79,6 +79,11 @@ type PalworldRestoreStatus struct {
 	// +optional
 	JobName string `json:"jobName,omitempty"`
 
+	// OriginalReplicas records the game's desired replica count before the
+	// restore stopped it, so it can be returned to that state afterwards.
+	// +optional
+	OriginalReplicas *int32 `json:"originalReplicas,omitempty"`
+
 	// Conditions represent the latest observations of the restore's state.
 	// +optional
 	// +patchMergeKey=type

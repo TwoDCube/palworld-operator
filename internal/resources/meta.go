@@ -84,19 +84,21 @@ func SelectorLabels(g *palworldv1alpha1.PalworldGame) map[string]string {
 	}
 }
 
-// CommonLabels are applied to every child object.
+// CommonLabels are applied to every child object. User-supplied PodLabels are
+// applied first so the reserved identity/selector labels always win — otherwise
+// a user label could break the StatefulSet selector or the ServiceMonitor
+// target.
 func CommonLabels(g *palworldv1alpha1.PalworldGame) map[string]string {
-	l := map[string]string{
-		labelName:      appName,
-		labelInstance:  g.Name,
-		labelManagedBy: managedByValue,
-		labelComponent: "server",
-		labelPartOf:    appName,
-		labelGame:      g.Name,
-	}
+	l := map[string]string{}
 	for k, v := range g.Spec.PodLabels {
 		l[k] = v
 	}
+	l[labelName] = appName
+	l[labelInstance] = g.Name
+	l[labelManagedBy] = managedByValue
+	l[labelComponent] = "server"
+	l[labelPartOf] = appName
+	l[labelGame] = g.Name
 	return l
 }
 

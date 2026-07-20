@@ -45,8 +45,13 @@ if [ "${REST_ENABLED}" = "true" ] && [ -n "${ADMIN_PASSWORD}" ]; then
     log "REST shutdown failed; falling back to signal"
 fi
 
-if [ -n "${SERVER_PID}" ] && kill -0 "${SERVER_PID}" 2>/dev/null; then
-    log "sending SIGINT to pid ${SERVER_PID} for clean save-on-exit"
+# PalServer.sh does not exec the game binary, so the wrapper PID passed in is
+# not the process that must receive SIGINT to save. Signal the real shipping
+# binary directly, falling back to the wrapper PID.
+log "sending SIGINT to the server process for a clean save-on-exit"
+if command -v pkill >/dev/null 2>&1 && pkill -INT -f 'PalServer-Linux-Shipping' 2>/dev/null; then
+    :
+elif [ -n "${SERVER_PID}" ] && kill -0 "${SERVER_PID}" 2>/dev/null; then
     kill -INT "${SERVER_PID}" 2>/dev/null || true
 fi
 exit 0

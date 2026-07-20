@@ -555,6 +555,11 @@ func (in *PalworldRestoreStatus) DeepCopyInto(out *PalworldRestoreStatus) {
 		in, out := &in.CompletionTime, &out.CompletionTime
 		*out = (*in).DeepCopy()
 	}
+	if in.OriginalReplicas != nil {
+		in, out := &in.OriginalReplicas, &out.OriginalReplicas
+		*out = new(int32)
+		**out = **in
+	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]metav1.Condition, len(*in))

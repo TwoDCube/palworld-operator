@@ -53,6 +53,7 @@ type PalworldBackupReconciler struct {
 
 // +kubebuilder:rbac:groups=palworld.twodcube.io,resources=palworldbackups,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=palworld.twodcube.io,resources=palworldbackups/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=palworld.twodcube.io,resources=palworldbackups/finalizers,verbs=update
 // +kubebuilder:rbac:groups=palworld.twodcube.io,resources=palworldgames,verbs=get;list;watch
 // +kubebuilder:rbac:groups=snapshot.storage.k8s.io,resources=volumesnapshots,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
@@ -155,13 +156,31 @@ func (r *PalworldBackupReconciler) start(ctx context.Context, backup *palworldv1
 	return r.createUploadJob(ctx, backup, game, resources.DataPVCName(game))
 }
 
+// backupPhaseTimeout bounds how long a backup may sit in a non-terminal phase
+// (snapshotting/uploading) before it is failed, so a deleted snapshot or a
+// garbage-collected Job never wedges the state machine forever.
+const backupPhaseTimeout = 45 * time.Minute
+
+func (r *PalworldBackupReconciler) timedOut(backup *palworldv1alpha1.PalworldBackup) bool {
+	return backup.Status.StartTime != nil && time.Since(backup.Status.StartTime.Time) > backupPhaseTimeout
+}
+
 // reconcileSnapshot waits for the snapshot to be ready, then completes (for the
 // VolumeSnapshot destination) or provisions a clone PVC + upload job.
 func (r *PalworldBackupReconciler) reconcileSnapshot(ctx context.Context, backup *palworldv1alpha1.PalworldBackup, game *palworldv1alpha1.PalworldGame) (ctrl.Result, error) {
 	snap := &unstructured.Unstructured{}
 	snap.SetGroupVersionKind(resources.VolumeSnapshotGVK)
-	if err := r.Get(ctx, client.ObjectKey{Name: resources.SnapshotName(backup), Namespace: backup.Namespace}, snap); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+	err := r.Get(ctx, client.ObjectKey{Name: resources.SnapshotName(backup), Namespace: backup.Namespace}, snap)
+	if apierrors.IsNotFound(err) {
+		// VolumeSnapshot is not in the watch set, so a NotFound (cache lag right
+		// after create, or an externally deleted snapshot) must self-requeue.
+		if r.timedOut(backup) {
+			return r.fail(ctx, backup, "SnapshotMissing", "VolumeSnapshot did not appear within the deadline")
+		}
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 	ready, size := resources.SnapshotReady(snap)
 	if !ready {
@@ -204,8 +223,17 @@ func (r *PalworldBackupReconciler) createUploadJob(ctx context.Context, backup *
 // reconcileUpload watches the upload Job to completion.
 func (r *PalworldBackupReconciler) reconcileUpload(ctx context.Context, backup *palworldv1alpha1.PalworldBackup, game *palworldv1alpha1.PalworldGame) (ctrl.Result, error) {
 	var job batchv1.Job
-	if err := r.Get(ctx, client.ObjectKey{Name: resources.BackupJobName(backup.Name), Namespace: backup.Namespace}, &job); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+	err := r.Get(ctx, client.ObjectKey{Name: resources.BackupJobName(backup.Name), Namespace: backup.Namespace}, &job)
+	if apierrors.IsNotFound(err) {
+		// The Job carries a TTL; if it was GC'd before we observed completion we
+		// cannot tell success from failure, so bound the wait and fail out.
+		if r.timedOut(backup) {
+			return r.fail(ctx, backup, "UploadJobMissing", "upload Job disappeared before completion was observed")
+		}
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 	if job.Status.Succeeded >= 1 {
 		backup.Status.Location = r.uploadLocation(backup, game)
