@@ -436,6 +436,33 @@ spec:
                     - LoadBalancer
                     type: string
                 type: object
+              nodeDrain:
+                description: |-
+                  NodeDrain configures graceful migration when the server's node is
+                  cordoned/drained. Enabled by default when omitted.
+                properties:
+                  disabled:
+                    default: false
+                    description: |-
+                      Disabled turns off automatic graceful migration off draining nodes. The
+                      behavior is enabled by default (a nil NodeDrainPolicy means enabled).
+                    type: boolean
+                  gracePeriodSeconds:
+                    default: 30
+                    description: |-
+                      GracePeriodSeconds is how long players are warned before the server is
+                      migrated off a draining node. 0 migrates immediately.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  warnMessage:
+                    default: 'Server node maintenance: migrating in %d seconds, please
+                      reach a safe spot'
+                    description: |-
+                      WarnMessage is broadcast to players when a drain is detected. It may
+                      contain "%d", which is replaced with the remaining seconds.
+                    type: string
+                type: object
               podAnnotations:
                 additionalProperties:
                   type: string
@@ -4243,6 +4270,11 @@ spec:
                 description: |-
                   CredentialsSecret is the Secret holding the (possibly generated) server
                   passwords.
+                type: string
+              currentNode:
+                description: |-
+                  CurrentNode is the node the server pod is currently scheduled on. It is
+                  used to react to that node being cordoned/drained.
                 type: string
               currentVersion:
                 description: |-

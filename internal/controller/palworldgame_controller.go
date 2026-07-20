@@ -33,6 +33,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	palworldv1alpha1 "github.com/twodcube/palworld-operator/api/v1alpha1"
@@ -69,7 +70,8 @@ type PalworldGameReconciler struct {
 // +kubebuilder:rbac:groups=palworld.twodcube.io,resources=palworldbackups,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services;configmaps;secrets;serviceaccounts;persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;patch;update;delete
+// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
@@ -111,6 +113,12 @@ func (r *PalworldGameReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Refresh live/observed status (best-effort).
 	r.reconcileObservedStatus(ctx, &game)
 
+	// React to the hosting node being cordoned/drained (warn, save, migrate).
+	drainRes, err := r.reconcileNodeDrain(ctx, &game)
+	if err != nil {
+		logger.Error(err, "node drain reconciliation failed")
+	}
+
 	// Version update detection + rollout.
 	updateRes, err := r.reconcileUpdates(ctx, &game)
 	if err != nil {
@@ -130,8 +138,10 @@ func (r *PalworldGameReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	requeue := requeueInterval
-	if updateRes.RequeueAfter > 0 && updateRes.RequeueAfter < requeue {
-		requeue = updateRes.RequeueAfter
+	for _, d := range []time.Duration{updateRes.RequeueAfter, drainRes.RequeueAfter} {
+		if d > 0 && d < requeue {
+			requeue = d
+		}
 	}
 	return ctrl.Result{RequeueAfter: requeue}, nil
 }
@@ -361,6 +371,8 @@ func (r *PalworldGameReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&policyv1.PodDisruptionBudget{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&palworldv1alpha1.PalworldBackup{}).
+		// React to the hosting node being cordoned/drained.
+		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.gamesOnNode)).
 		Complete(r)
 }
 

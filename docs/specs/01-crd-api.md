@@ -54,6 +54,10 @@ Printer columns: `Phase` ← `.status.phase`, `Version` ← `.status.serverVersi
 | `update` | `*UpdatePolicy` | nil | See below and spec 03. |
 | `podDisruptionBudget.enabled` | bool | `true` | |
 | `podDisruptionBudget.minAvailable` | `*int32` | `1` | |
+| `nodeDrain` | `*NodeDrainPolicy` | nil (= enabled) | Graceful migration off draining nodes (spec 11). |
+| `nodeDrain.disabled` | bool | `false` | |
+| `nodeDrain.gracePeriodSeconds` | int32 (≥0) | `30` | Warn-to-migrate delay. |
+| `nodeDrain.warnMessage` | string | `"Server node maintenance: migrating in %d seconds, please reach a safe spot"` | `%d` → grace seconds. |
 | `monitoring.serviceMonitor` | bool | `false` | |
 | `monitoring.metricsExporter` | bool | `true` | Requires `OPERATOR_IMAGE` set for the sidecar to be added. |
 | `serviceAccountName` | string | `""` | Empty → operator manages `<name>`. |
@@ -127,6 +131,7 @@ Condition types (`metav1.Condition`): `Ready`, `Progressing`, `Degraded`,
 | `restEndpoint` | string | `<name>-admin.<ns>.svc:8212` |
 | `routeURL` | string | Route host, if created |
 | `persistentVolumeClaim` | string | `data-<name>-0` |
+| `currentNode` | string | the node the server pod runs on (spec 11) |
 | `credentialsSecret` | string | user or generated secret name |
 | `lastBackupTime` / `lastBackupName` | `*Time` / string | newest completed backup (04) |
 | `nextScheduledBackup` | `*Time` | scheduled-backup planner (04) |

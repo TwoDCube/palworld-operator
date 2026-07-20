@@ -386,6 +386,31 @@ type MonitoringSpec struct {
 	MetricsExporter bool `json:"metricsExporter,omitempty"`
 }
 
+// NodeDrainPolicy configures how the operator reacts when the node hosting the
+// server pod is cordoned/drained (e.g. for node maintenance). When enabled, the
+// operator warns players, flushes a save, and gracefully migrates the pod to a
+// healthy node instead of letting an abrupt eviction interrupt it.
+type NodeDrainPolicy struct {
+	// Disabled turns off automatic graceful migration off draining nodes. The
+	// behavior is enabled by default (a nil NodeDrainPolicy means enabled).
+	// +kubebuilder:default=false
+	// +optional
+	Disabled bool `json:"disabled,omitempty"`
+
+	// GracePeriodSeconds is how long players are warned before the server is
+	// migrated off a draining node. 0 migrates immediately.
+	// +kubebuilder:default=30
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	GracePeriodSeconds int32 `json:"gracePeriodSeconds,omitempty"`
+
+	// WarnMessage is broadcast to players when a drain is detected. It may
+	// contain "%d", which is replaced with the remaining seconds.
+	// +kubebuilder:default="Server node maintenance: migrating in %d seconds, please reach a safe spot"
+	// +optional
+	WarnMessage string `json:"warnMessage,omitempty"`
+}
+
 // PodDisruptionSpec configures a PodDisruptionBudget for the server pod.
 type PodDisruptionSpec struct {
 	// Enabled creates a PodDisruptionBudget for the server.

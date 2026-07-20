@@ -94,6 +94,11 @@ type PalworldGameSpec struct {
 	// +optional
 	PodDisruptionBudget *PodDisruptionSpec `json:"podDisruptionBudget,omitempty"`
 
+	// NodeDrain configures graceful migration when the server's node is
+	// cordoned/drained. Enabled by default when omitted.
+	// +optional
+	NodeDrain *NodeDrainPolicy `json:"nodeDrain,omitempty"`
+
 	// Monitoring configures metrics and Prometheus integration.
 	// +optional
 	Monitoring MonitoringSpec `json:"monitoring,omitempty"`
@@ -203,6 +208,11 @@ type PalworldGameStatus struct {
 	// PersistentVolumeClaim is the name of the bound world-data PVC.
 	// +optional
 	PersistentVolumeClaim string `json:"persistentVolumeClaim,omitempty"`
+
+	// CurrentNode is the node the server pod is currently scheduled on. It is
+	// used to react to that node being cordoned/drained.
+	// +optional
+	CurrentNode string `json:"currentNode,omitempty"`
 
 	// CredentialsSecret is the Secret holding the (possibly generated) server
 	// passwords.

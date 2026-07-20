@@ -57,7 +57,9 @@ admin API externally) and `serviceType=LoadBalancer` (needs a UDP-capable LB).
 The generated ClusterRole `manager-role` (`config/rbac/role.yaml`) grants:
 
 - core: `configmaps`, `persistentvolumeclaims`, `secrets`, `serviceaccounts`,
-  `services` (full CRUD); `events` (create/patch); `pods` (get/list/watch/delete).
+  `services` (full CRUD); `events` (create/patch); `pods`
+  (get/list/watch/patch/update/delete); `nodes` (get/list/watch, for node-drain
+  handling — spec 11).
 - `apps/statefulsets`, `batch/jobs`, `policy/poddisruptionbudgets`,
   `networking.k8s.io/networkpolicies`, `monitoring.coreos.com/servicemonitors`,
   `route.openshift.io/routes`, `snapshot.storage.k8s.io/volumesnapshots` (full

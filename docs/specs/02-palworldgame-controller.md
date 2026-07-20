@@ -17,11 +17,13 @@ Source: `internal/controller/palworldgame_*.go`, `internal/resources/*.go`.
 5. `reconcileResources` — ensure every owned object (order below). On error:
    set `Progressing=True/ReconcileError`, best-effort status update, return err.
 6. `reconcileObservedStatus` — refresh observed state (best-effort, never errors).
-7. `reconcileUpdates` — version poll + rollout (spec 03).
-8. `reconcileScheduledBackups` — scheduled-backup planner + retention (spec 04).
-9. `updateStatus` — `Status().Update`; on conflict, requeue.
-10. Requeue after `requeueInterval` (60s), or sooner if `reconcileUpdates`
-    returned a shorter `RequeueAfter`.
+7. `reconcileNodeDrain` — maintain `status.currentNode` and gracefully migrate
+   off a cordoned/draining node (spec 11).
+8. `reconcileUpdates` — version poll + rollout (spec 03).
+9. `reconcileScheduledBackups` — scheduled-backup planner + retention (spec 04).
+10. `updateStatus` — `Status().Update`; on conflict, requeue.
+11. Requeue after `requeueInterval` (60s), or sooner if `reconcileUpdates` or
+    `reconcileNodeDrain` returned a shorter `RequeueAfter`.
 
 ## Owned resources and names
 
@@ -125,7 +127,8 @@ Runs only while the finalizer is present:
 ## SetupWithManager
 
 `Owns`: StatefulSet, Service, ConfigMap, Secret, ServiceAccount,
-PodDisruptionBudget, NetworkPolicy, PalworldBackup. Reads env once:
+PodDisruptionBudget, NetworkPolicy, PalworldBackup. `Watches` Nodes via the
+`gamesOnNode` map function to react to cordons (spec 11). Reads env once:
 `OPERATOR_NAMESPACE` (default `palworld-operator-system`), `OPERATOR_IMAGE` (no
 default — empty disables the metrics sidecar), `DEFAULT_SERVER_IMAGE` (default
 `quay.io/twodcube/palworld-server:latest`), `STEAM_INFO_ENDPOINT` (empty → the

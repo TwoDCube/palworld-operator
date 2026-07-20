@@ -26,6 +26,7 @@ update the relevant spec first and then make the code conform.
 | 08 | [networking.md](08-networking.md) | Services, ports, NetworkPolicy, and the OpenShift Route. |
 | 09 | [security-rbac.md](09-security-rbac.md) | Security contexts, SCC, credentials, RBAC, and the validating webhook. |
 | 10 | [deployment.md](10-deployment.md) | The manager deployment, flags/env, and kustomize overlays. |
+| 11 | [node-drain.md](11-node-drain.md) | Graceful migration when the hosting node is cordoned/drained. |
 
 ## Global constants
 

@@ -30,6 +30,9 @@ host hundreds of independent worlds.
     save-and-restart, and optional pre-update backup.
 - **Graceful lifecycle** — `preStop` + `SIGTERM` drive an RCON/REST
   `save`-then-`shutdown` so worlds are never corrupted by an abrupt stop.
+- **Node-drain aware** — when the hosting node is cordoned for maintenance the
+  operator warns players, waits a grace period, flushes a save, and migrates the
+  pod to a healthy node (which also lets the `kubectl drain` complete).
 - **OpenShift-native:**
   - Server image runs cleanly under the default **restricted-v2 SCC**
     (arbitrary non-root UID, GID 0, group-writable data — no privileges).
