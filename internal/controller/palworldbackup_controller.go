@@ -106,10 +106,9 @@ func (r *PalworldBackupReconciler) start(ctx context.Context, backup *palworldv1
 		backup.Status.StartTime = &now
 	}
 	backup.Status.ServerVersion = game.Status.CurrentVersion
-	if err := controllerutil.SetControllerReference(game, backup, r.Scheme); err != nil {
-		// Non-fatal: the backup may be intentionally unowned (final backup).
-		_ = err
-	}
+	// Ownership (if any) is set at creation time by whoever created the backup:
+	// scheduled/pre-update backups are owned by the game, while final and
+	// on-demand backups are intentionally left unowned so they survive.
 
 	// Flush the world to disk for an application-consistent backup.
 	if backup.Spec.FlushSave {

@@ -188,6 +188,9 @@ func opsPodSecurityContext(openShift bool) *corev1.PodSecurityContext {
 func buildWorkerJob(g *palworldv1alpha1.PalworldGame, js JobSpec) *batchv1.Job {
 	backoff := int32(3)
 	ttl := int32(3600)
+	// Bound the job so a never-binding clone PVC or a wedged upload eventually
+	// fails the backup/restore instead of hanging the state machine forever.
+	activeDeadline := int64(3 * 60 * 60)
 	mounts := []corev1.VolumeMount{{Name: "data", MountPath: DataMountPath}}
 	volumes := []corev1.Volume{
 		{Name: "data", VolumeSource: corev1.VolumeSource{
@@ -213,6 +216,7 @@ func buildWorkerJob(g *palworldv1alpha1.PalworldGame, js JobSpec) *batchv1.Job {
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            &backoff,
 			TTLSecondsAfterFinished: &ttl,
+			ActiveDeadlineSeconds:   &activeDeadline,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: CommonLabels(g)},
 				Spec: corev1.PodSpec{
