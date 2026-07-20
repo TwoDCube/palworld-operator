@@ -3,7 +3,7 @@
 # Palworld dedicated server entrypoint.
 #
 # Responsibilities:
-#   1. Make an arbitrary (OpenShift-assigned) UID usable (nss_wrapper).
+#   1. Make an arbitrary (OpenShift-assigned) UID usable (/etc/passwd entry).
 #   2. Install / update the server binaries via SteamCMD onto the data volume.
 #   3. Render PalWorldSettings.ini from the operator-provided config, injecting
 #      secret values (passwords) at runtime rather than baking them into a
@@ -43,21 +43,21 @@ CONFIG_DIR="${STEAMAPPDIR}/Pal/Saved/Config/LinuxServer"
 SERVER_BIN="${STEAMAPPDIR}/PalServer.sh"
 
 # --- 1. Arbitrary UID support (OpenShift restricted-v2) -----------------------
-# When running as a UID with no /etc/passwd entry, generate one via nss_wrapper
-# so SteamCMD (which calls getpwuid) works and $HOME resolves.
+# When running as a UID with no /etc/passwd entry, append one so SteamCMD (which
+# calls getpwuid) works and $HOME resolves. /etc/passwd is made group-writable
+# (GID 0) in the image, which is the standard OpenShift arbitrary-UID pattern.
 current_uid="$(id -u)"
 current_gid="$(id -g)"
 export HOME="${HOME:-/home/steam}"
 if ! whoami >/dev/null 2>&1; then
-    log "running as unmapped uid ${current_uid}; enabling nss_wrapper"
+    log "running as unmapped uid ${current_uid}; registering a passwd entry"
     if [ ! -w "${HOME}" ]; then
         export HOME=/tmp
     fi
-    printf 'steam:x:%s:%s:steam:%s:/bin/bash\n' "${current_uid}" "${current_gid}" "${HOME}" > "${NSS_WRAPPER_PASSWD}"
-    printf 'root:x:0:\nsteam:x:%s:\n' "${current_gid}" > "${NSS_WRAPPER_GROUP}"
-    LIB=$(find / -name 'libnss_wrapper.so' 2>/dev/null | head -n1 || true)
-    if [ -n "${LIB}" ]; then
-        export LD_PRELOAD="${LIB}"
+    if [ -w /etc/passwd ]; then
+        printf 'steam:x:%s:%s:steam:%s:/bin/bash\n' "${current_uid}" "${current_gid}" "${HOME}" >> /etc/passwd
+    else
+        log "WARNING: /etc/passwd is not writable; SteamCMD may warn about the missing user"
     fi
 fi
 
@@ -119,24 +119,34 @@ render_settings() {
         return 0
     fi
     log "rendering ${CONFIG_DIR}/PalWorldSettings.ini"
-    local content
-    content="$(cat "${SETTINGS_SOURCE}")"
-    # Literal substitution of secret placeholders. In bash's ${var//pat/repl}
-    # the replacement string is NOT fully literal: a backslash escapes and (bash
-    # 5.2+) a bare '&' expands to the matched text. Escape both so passwords
-    # containing '&' or '\' round-trip unchanged.
-    subst() {
-        local token="$1" value="$2"
-        value="${value//\\/\\\\}"
-        value="${value//&/\\&}"
-        content="${content//${token}/${value}}"
-    }
-    subst "__PALWORLD_ADMIN_PASSWORD__" "${ADMIN_PASSWORD}"
-    subst "__PALWORLD_SERVER_PASSWORD__" "${SERVER_PASSWORD}"
-    subst "__PALWORLD_RCON_PASSWORD__" "${RCON_PASSWORD}"
-    subst "__PALWORLD_PUBLIC_IP__" "${PUBLIC_IP}"
     umask 0002
-    printf '%s\n' "${content}" > "${CONFIG_DIR}/PalWorldSettings.ini"
+    # Literal token substitution via awk + ENVIRON. Passing the secrets through
+    # the environment (not awk -v) avoids awk's backslash-escape processing, and
+    # index()/substr() do a purely literal replace, so passwords containing any
+    # character (& \ / " etc.) are inserted verbatim regardless of the bash or
+    # awk version.
+    ADMIN_PASSWORD="${ADMIN_PASSWORD}" \
+    SERVER_PASSWORD="${SERVER_PASSWORD}" \
+    RCON_PASSWORD="${RCON_PASSWORD}" \
+    PUBLIC_IP="${PUBLIC_IP}" \
+    awk '
+    BEGIN {
+        n = split("__PALWORLD_ADMIN_PASSWORD__ __PALWORLD_SERVER_PASSWORD__ __PALWORLD_RCON_PASSWORD__ __PALWORLD_PUBLIC_IP__", toks, " ")
+        vals[1] = ENVIRON["ADMIN_PASSWORD"]; vals[2] = ENVIRON["SERVER_PASSWORD"]
+        vals[3] = ENVIRON["RCON_PASSWORD"];  vals[4] = ENVIRON["PUBLIC_IP"]
+    }
+    {
+        line = $0
+        for (i = 1; i <= n; i++) {
+            t = toks[i]; v = vals[i]; tl = length(t); out = ""
+            while ((p = index(line, t)) > 0) {
+                out = out substr(line, 1, p - 1) v
+                line = substr(line, p + tl)
+            }
+            line = out line
+        }
+        print line
+    }' "${SETTINGS_SOURCE}" > "${CONFIG_DIR}/PalWorldSettings.ini"
     if [ -f "${ENGINE_SOURCE}" ]; then
         cp -f "${ENGINE_SOURCE}" "${CONFIG_DIR}/Engine.ini"
     fi

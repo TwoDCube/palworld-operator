@@ -5,15 +5,20 @@ Source: `build/palworld-server/` (`Dockerfile`, `entrypoint.sh`,
 
 ## Image
 
-Base `debian:bookworm-slim`. Installs SteamCMD's 32-bit libraries plus
-`ca-certificates curl jq procps tar gzip xz-utils tini rclone libnss-wrapper
-locales`, and SteamCMD into `/steamcmd`. Baked env: `STEAM_APP_ID=2394010`,
-`STEAMAPPDIR=/palworld`, `HOME=/home/steam`, `NSS_WRAPPER_PASSWD=/tmp/passwd`,
-`NSS_WRAPPER_GROUP=/tmp/group`.
+Base `registry.access.redhat.com/ubi9/ubi:latest`. Installs (via `dnf`)
+SteamCMD's 32-bit libraries (`glibc.i686`, `libstdc++.i686`) plus
+`ca-certificates tar gzip xz procps-ng findutils gawk jq unzip shadow-utils
+glibc-langpack-en`. `tini` and `rclone` are not in the UBI repos and are fetched
+as static binaries (`tini-static-amd64` from the tini GitHub release; the current
+linux-amd64 `rclone` zip). SteamCMD is unpacked into `/steamcmd`. Baked env:
+`STEAM_APP_ID=2394010`, `STEAMAPPDIR=/palworld`, `HOME=/home/steam`,
+`LANG=LC_ALL=en_US.UTF-8`.
 
 Arbitrary-UID layout: `${STEAMAPPDIR}`, `${HOME}`, `/steamcmd`, `/config` are
 `chgrp -R 0` + `chmod -R g=u` and directories get the setgid bit, so any UID that
-is a member of GID 0 can read/write and new files keep GID 0.
+is a member of GID 0 can read/write and new files keep GID 0. `/etc/passwd` and
+`/etc/group` are made group-writable (`chmod g=u`) so the entrypoint can register
+the arbitrary UID.
 
 `EXPOSE 8211/udp 27015/udp 25575/tcp 8212/tcp`. `USER 10000:0` (OpenShift
 overrides with an arbitrary UID). `ENTRYPOINT ["/usr/bin/tini","-g","--",
@@ -51,21 +56,22 @@ supported.
 
 ## entrypoint.sh
 
-1. **Arbitrary UID**: if `whoami` fails (UID not in `/etc/passwd`), write an
-   `nss_wrapper` passwd/group entry for the current UID/GID and `LD_PRELOAD`
-   `libnss_wrapper.so`; fall back `HOME=/tmp` if `HOME` is not writable.
+1. **Arbitrary UID**: if `whoami` fails (UID not in `/etc/passwd`), append a
+   `steam` passwd entry for the current UID/GID to the group-writable
+   `/etc/passwd`; fall back `HOME=/tmp` if `HOME` is not writable.
 2. **Install/update**: run SteamCMD `app_update 2394010` into `${STEAMAPPDIR}`
    (branch = `STEAM_BRANCH`, `+betapassword` / `validate` as configured),
    retrying up to 5 times with linear backoff; skipped when `SKIP_UPDATE=true`
    and the binary already exists. Records the installed build id to
    `${STEAMAPPDIR}/.buildid`. Copies `steamclient.so` into `~/.steam/sdk64`.
-3. **Render config**: copy `${SETTINGS_SOURCE}` to
+3. **Render config**: render `${SETTINGS_SOURCE}` to
    `${STEAMAPPDIR}/Pal/Saved/Config/LinuxServer/PalWorldSettings.ini`, replacing
    the `__PALWORLD_ADMIN_PASSWORD__`, `__PALWORLD_SERVER_PASSWORD__`,
    `__PALWORLD_RCON_PASSWORD__`, and `__PALWORLD_PUBLIC_IP__` tokens with env
-   values. The substitution escapes `\` then `&` first so passwords containing
-   those characters round-trip correctly under bash 5.2. `Engine.ini` is copied
-   if present.
+   values. Substitution is done by `awk` using `index()`/`substr()` with the
+   secrets read from `ENVIRON`, so any character (`& \ / "`) is inserted
+   literally regardless of the bash/awk version. `Engine.ini` is copied if
+   present.
 4. **Launch**: run `PalServer.sh` in the background with base args
    `-port -queryport -players -log`, appending `-servername` only when
    `PALWORLD_SERVER_NAME` is set, `-RCONEnabled=True -RCONPort` /

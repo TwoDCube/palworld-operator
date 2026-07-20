@@ -126,11 +126,13 @@ PVC unless `storage.retain`, then removes the finalizer.
 
 ## The game server image
 
-`build/palworld-server` builds an OpenShift-friendly image:
+`build/palworld-server` builds an OpenShift-friendly image on UBI9
+(`ubi9/ubi`):
 
 - **Arbitrary UID**: every writable path (SteamCMD install, save dir, config,
-  HOME) is group-root (GID 0) writable with the setgid bit; `nss_wrapper`
-  synthesizes a `passwd` entry for the random UID so SteamCMD works.
+  HOME) is group-root (GID 0) writable with the setgid bit; the entrypoint
+  appends a `passwd` entry for the random UID (via a group-writable
+  `/etc/passwd`) so SteamCMD works.
 - **Entrypoint**: installs/updates via SteamCMD onto the PVC, renders
   `PalWorldSettings.ini` (injecting secret passwords from env), launches
   `PalServer.sh` with the performance flag trio, and traps `SIGTERM` for a
