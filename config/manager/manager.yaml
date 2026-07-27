@@ -91,6 +91,12 @@ spec:
             cpu: 10m
             memory: 128Mi
           limits:
-            memory: 256Mi
+            # Sized against the label-scoped informer cache (see
+            # operatorCacheOptions in cmd/main.go), with headroom for the
+            # deliberately unfiltered Node informer on large clusters. The
+            # initial LIST is the memory peak, not the steady state — the
+            # previous 256Mi was enough for steady state and still OOMKilled the
+            # manager seconds after startup.
+            memory: 512Mi
       serviceAccountName: controller-manager
       terminationGracePeriodSeconds: 10

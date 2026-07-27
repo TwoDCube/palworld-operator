@@ -61,7 +61,11 @@ Printer columns: `Phase` ← `.status.phase`, `Version` ← `.status.serverVersi
 | `monitoring.serviceMonitor` | bool | `false` | |
 | `monitoring.metricsExporter` | bool | `true` | Requires `OPERATOR_IMAGE` set for the sidecar to be added. |
 | `serviceAccountName` | string | `""` | Empty → operator manages `<name>`. |
-| `terminationGracePeriodSeconds` | `*int64` | `120` | |
+| `shutdown` | `*ShutdownPolicy` | nil (= defaults) | Player countdown before the server stops (spec 07). |
+| `shutdown.warnSeconds` | int32 (≥0) | `300` | 0 stops immediately. |
+| `shutdown.warnIntervalSeconds` | int32 (≥1) | `60` | Re-broadcast cadence. |
+| `shutdown.warnMessage` | string | `"Server is shutting down for maintenance in %s"` | `%s` → human-readable remaining time, `%d` → remaining seconds. |
+| `terminationGracePeriodSeconds` | `*int64` | nil → `shutdown.warnSeconds + 300` (`600`) | Must outlast the countdown, which runs in `preStop`. An explicit value is honoured verbatim; if it leaves under 30s of headroom the webhook warns and the container clamps the countdown (spec 07). |
 | `podAnnotations` | `map[string]string` | — | On the pod template. |
 | `podLabels` | `map[string]string` | — | Merged into labels; reserved identity labels always win (spec 02). |
 | `extraEnv` | `[]EnvVar` | — | Appended to the server container. |
@@ -85,10 +89,24 @@ Printer columns: `Phase` ← `.status.phase`, `Version` ← `.status.serverVersi
 | ----- | ---- | ------- |
 | `strategy` | enum `Manual\|Automatic\|Scheduled` | `Manual` |
 | `schedule` | string (cron) | `""` (required for `Scheduled`) |
-| `drainTimeoutSeconds` | int32 | `300` |
+| `drainTimeoutSeconds` | int32 (≥0) | `300` (0 = no drain wait) |
 | `warnMessage` | string | `"Server will restart for updates in %d seconds"` |
+| `warnIntervalSeconds` | int32 (≥1) | `60` |
 | `backupBeforeUpdate` | bool | `true` |
 | `pollIntervalMinutes` | int32 (≥1) | `30` |
+
+### `ShutdownPolicy`
+
+| Field | Type | Default |
+| ----- | ---- | ------- |
+| `warnSeconds` | int32 (≥0) | `300` |
+| `warnIntervalSeconds` | int32 (≥1) | `60` |
+| `warnMessage` | string | `"Server is shutting down for maintenance in %s"` |
+
+Applies to **every** pod termination, because it is enforced by the container's
+`preStop` hook rather than by a controller code path (spec 07).
+`update.drainTimeoutSeconds` is a separate, update-only wait for players to leave
+*before* the pod is deleted; the two stack (spec 03).
 
 ### `BackupDestination` / `S3Destination`
 
@@ -137,6 +155,8 @@ Condition types (`metav1.Condition`): `Ready`, `Progressing`, `Degraded`,
 | `nextScheduledBackup` | `*Time` | scheduled-backup planner (04) |
 | `lastUpdateTime` | `*Time` | update rollout (03) |
 | `nextScheduledUpdateCheck` | `*Time` | update poller (03) |
+| `updateDrainStartTime` | `*Time` | player drain in progress; cleared on restart (03) |
+| `updateDrainLastWarnTime` | `*Time` | rate-limits drain re-broadcasts (03) |
 
 ## PalworldBackup
 

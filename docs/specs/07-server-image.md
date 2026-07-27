@@ -47,6 +47,10 @@ has defaults (shown) for standalone use:
 | `SERVER_PASSWORD` | from credentials Secret (`secretKeyRef`, optional) | `""` |
 | `PUBLIC_IP` / `PUBLIC_PORT` | from `networking` when set | `""` |
 | `RCON_PASSWORD` | not set → defaults to `ADMIN_PASSWORD` | `${ADMIN_PASSWORD}` |
+| `SHUTDOWN_WARN_SECONDS` | `shutdown.warnSeconds` | `300` |
+| `SHUTDOWN_WARN_INTERVAL_SECONDS` | `shutdown.warnIntervalSeconds` | `60` |
+| `SHUTDOWN_WARN_MESSAGE` | `shutdown.warnMessage` | `Server is shutting down for maintenance in %s` |
+| `SHUTDOWN_GRACE_SECONDS` | effective `terminationGracePeriodSeconds` | `0` (= no clamp) |
 | plus `spec.extraEnv` | — | — |
 
 `PALWORLD_SERVER_NAME` is **not** set by the operator (the rendered INI drives
@@ -82,12 +86,49 @@ supported.
 
 ## graceful-shutdown.sh
 
-When `REST_ENABLED=true` and `ADMIN_PASSWORD` is set: REST `announce` → `save`
-→ `shutdown` (5s wait). On any failure, or if REST is disabled, fall back to
-`pkill -INT -f PalServer-Linux-Shipping` (the real binary, since `PalServer.sh`
-does not `exec`), else `SIGINT` to the passed wrapper PID. Invoked both by the
-entrypoint trap and by the pod's `preStop` hook (spec 02); the operator sets
-`terminationGracePeriodSeconds` (default 120) to give it time.
+Runs a **player countdown** before stopping, so no session is cut off by an
+unannounced restart. Every termination path (settings change, update, node
+drain, manual pod delete) goes through the pod's `preStop` hook, so this script
+is the single place that decides how much notice players get.
+
+Order of operations:
+
+1. **Single-flight guard.** The script is invoked *twice* per termination — once
+   by the `preStop` hook and again by the entrypoint's `SIGTERM` trap. The first
+   invocation claims `/tmp/.palworld-shutdown-in-progress` with `set -o
+   noclobber`; a later invocation sees the marker, logs, and exits 0
+   immediately. Without this the second run would start a second countdown and
+   overrun `terminationGracePeriodSeconds`, getting the pod `SIGKILL`ed
+   mid-save. (`SIGTERM` reaches only PID 1, not the game binary, so the trap
+   returning early leaves the first countdown running undisturbed.)
+2. **Skip when empty.** `GET /v1/api/players` decides whether anyone is
+   connected. With zero players the countdown is skipped entirely — there is
+   nobody to warn, and a routine roll of an idle server should not stall for
+   minutes. A failed/unparseable player query is treated as "players may be
+   online" and still warns.
+3. **Countdown.** Every `SHUTDOWN_WARN_INTERVAL_SECONDS` (default 60) it
+   broadcasts `SHUTDOWN_WARN_MESSAGE` with the remaining time, until
+   `SHUTDOWN_WARN_SECONDS` (default 300) is exhausted. In the message `%s` is
+   replaced with a human-readable remaining time (`5 minutes`, `1 minute`,
+   `30 seconds`) and `%d` with the remaining whole seconds. Defaults therefore
+   broadcast at T-5m, T-4m, T-3m, T-2m and T-1m. `warnSeconds: 0` skips the
+   countdown. Announce bodies are built with `jq` so quotes in an operator's
+   message cannot produce invalid JSON.
+4. **Clamp to the budget.** When `SHUTDOWN_GRACE_SECONDS` is > 0 the countdown
+   is clamped to `SHUTDOWN_GRACE_SECONDS - 30`, reserving 30s for the save and
+   clean shutdown. This bounds the countdown by the pod's real kubelet budget
+   even if an operator sets a `terminationGracePeriodSeconds` too small for the
+   configured warning (the webhook warns about that case — spec 01).
+5. **Stop.** REST `announce` → `save` → `shutdown` (`SHUTDOWN_WAIT_SECONDS`,
+   default 5).
+6. **Fallback.** On any REST failure, or when REST is disabled or
+   `ADMIN_PASSWORD` is empty, there is no way to broadcast, so the countdown is
+   skipped and the script falls back to `pkill -INT -f PalServer-Linux-Shipping`
+   (the real binary, since `PalServer.sh` does not `exec`), else `SIGINT` to the
+   passed wrapper PID.
+
+The operator sizes `terminationGracePeriodSeconds` to fit the countdown —
+`shutdown.warnSeconds + 300`, so 600s with defaults (spec 02).
 
 ## healthcheck.sh (probe backend)
 

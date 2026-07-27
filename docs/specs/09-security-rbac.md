@@ -35,6 +35,14 @@ and the REST basic-auth password (username `admin`). Passwords reach the server
 only via `secretKeyRef` env + INI placeholder substitution — never in a
 ConfigMap or the CR (spec 06/07).
 
+**Read path.** The manager's Secret cache is label-filtered to
+`app.kubernetes.io/managed-by=palworld-operator` (spec 10), which covers the
+operator-generated Secret but *not* a user-supplied one. `adminPassword`
+therefore selects its reader from `spec.credentials.secretName`: empty → the
+cached client; set → the manager's uncached `APIReader`, which reads straight
+from the API server. Reading a user Secret through the cached client would
+return `NotFound` even though the Secret exists.
+
 ## Validating webhook
 
 `PalworldGameValidator` (registered only when `--enable-webhooks` is set;

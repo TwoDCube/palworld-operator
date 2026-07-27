@@ -66,6 +66,11 @@ StatefulSet volume claim template — not GC'd automatically; see deletion).
 - `selector` = `SelectorLabels` (immutable).
 - Pod template annotation `palworld.twodcube.io/settings-hash` = `SettingsHash`
   (spec 06) so any settings change rolls the pod. `podAnnotations` merged in.
+- `terminationGracePeriodSeconds` = `spec.terminationGracePeriodSeconds` when
+  set, else **`shutdown.warnSeconds + 300`** (600s with defaults). The player
+  countdown runs inside the `preStop` hook (spec 07) and the kubelet's grace
+  clock covers `preStop`, so the budget must outlast the countdown or the pod is
+  `SIGKILL`ed mid-save; the extra 300s covers the REST save and clean exit.
 - One container `palworld` (image, env, ports, probes, lifecycle — spec 07), an
   optional `metrics-exporter` sidecar (spec 07/08) when
   `monitoring.metricsExporter` and `OPERATOR_IMAGE` set, then `spec.sidecars`.
@@ -89,6 +94,29 @@ updates: `clusterIP`/`clusterIPs` are kept from the live object, and a port's
 `nodePort` is kept when the desired value is `0`. It copies `type`, `selector`,
 `ports`, `publishNotReadyAddresses`, `externalTrafficPolicy`, and load-balancer
 fields from the desired object.
+
+It then **compares the mutated object against the copy it read and issues no
+`Update` at all when they are semantically equal.** Without the guard the
+operator re-`PUT`s all 3–4 Services on every reconcile. Those writes are normally
+no-ops server-side, but they are real API traffic, and they make the operator an
+active participant in any write amplification around a `Service` that another
+controller co-owns (any `LoadBalancer`). With the guard, the operator's field
+manager entry on a steady-state Service stops advancing entirely — verified on a
+live cluster, where the operator's `managedFields` entry stayed frozen at the
+creation timestamp for over an hour while the game ran.
+
+`reconcileUnstructured` (Route, ServiceMonitor) applies the same
+compare-before-write guard. It compares only the fields this operator manages
+(labels, annotations, ownerReferences, `spec`) because the live object also
+carries status and defaults written by other controllers.
+
+> The guard bounds what the operator writes; it does not stop a *third party*
+> from rewriting a Service. On the OKD4 test cluster MetalLB's `controller`
+> rewrites the game Service's **status subresource** ~14×/s with byte-identical
+> content (`ipMode: VIP`), and because the controller `Owns(&corev1.Service{})`,
+> each of those writes costs a reconcile. That is a MetalLB-side behaviour, not
+> an operator defect — the operator's own entry is frozen — but it is why the
+> reconcile rate on a `LoadBalancer` game can look pathological.
 
 ## Status derivation
 

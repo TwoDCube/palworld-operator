@@ -27,6 +27,85 @@ const (
 	GameFinalizer = "palworld.twodcube.io/finalizer"
 )
 
+// Shutdown defaults. These mirror the +kubebuilder:default markers on
+// ShutdownPolicy. The markers cover objects that went through the API server;
+// these constants keep the operator correct for objects persisted before the
+// field existed (their spec.shutdown stays nil, since CRD defaulting only fills
+// in a parent that is present) and for unit tests that build a PalworldGame
+// value directly.
+const (
+	// DefaultShutdownWarnSeconds is the player countdown before a stop.
+	DefaultShutdownWarnSeconds int32 = 300
+	// DefaultShutdownWarnIntervalSeconds re-broadcasts the countdown each minute.
+	DefaultShutdownWarnIntervalSeconds int32 = 60
+	// DefaultShutdownWarnMessage is the broadcast template. "%s" renders the
+	// remaining time in words, "%d" the remaining seconds.
+	DefaultShutdownWarnMessage = "Server is shutting down for maintenance in %s"
+
+	// ShutdownGraceHeadroomSeconds is added to the countdown to derive
+	// TerminationGracePeriodSeconds. It is the time left *after* the countdown
+	// for the REST save to flush a large world to the PVC and for the server to
+	// exit cleanly. Generous on purpose: overshooting costs nothing (the pod exits
+	// as soon as the process does), while undershooting means a SIGKILL mid-save.
+	ShutdownGraceHeadroomSeconds int64 = 300
+
+	// DefaultUpdateWarnIntervalSeconds re-broadcasts the pre-update drain warning
+	// once a minute. Mirrors the +kubebuilder:default on
+	// UpdatePolicy.WarnIntervalSeconds, for objects persisted before that field
+	// existed.
+	DefaultUpdateWarnIntervalSeconds int32 = 60
+
+	// ShutdownReserveSeconds is the minimum time the container keeps in reserve
+	// for the save and clean shutdown. When an explicit
+	// TerminationGracePeriodSeconds leaves less than this after the countdown, the
+	// webhook warns and graceful-shutdown.sh clamps the countdown to fit. Keep in
+	// step with SHUTDOWN_RESERVE_SECONDS in graceful-shutdown.sh.
+	ShutdownReserveSeconds int64 = 30
+)
+
+// ShutdownWarnSeconds returns the configured player countdown in seconds,
+// falling back to DefaultShutdownWarnSeconds when spec.shutdown is omitted. A
+// configured 0 is honoured (stop immediately).
+func (g *PalworldGame) ShutdownWarnSeconds() int32 {
+	if g.Spec.Shutdown == nil {
+		return DefaultShutdownWarnSeconds
+	}
+	if g.Spec.Shutdown.WarnSeconds < 0 {
+		return 0
+	}
+	return g.Spec.Shutdown.WarnSeconds
+}
+
+// ShutdownWarnIntervalSeconds returns how often the countdown is re-broadcast,
+// falling back to DefaultShutdownWarnIntervalSeconds. Never returns less than 1:
+// a 0 interval would spin the announce loop without advancing the countdown.
+func (g *PalworldGame) ShutdownWarnIntervalSeconds() int32 {
+	if g.Spec.Shutdown == nil || g.Spec.Shutdown.WarnIntervalSeconds < 1 {
+		return DefaultShutdownWarnIntervalSeconds
+	}
+	return g.Spec.Shutdown.WarnIntervalSeconds
+}
+
+// ShutdownWarnMessage returns the broadcast template, falling back to
+// DefaultShutdownWarnMessage when spec.shutdown or the message is omitted.
+func (g *PalworldGame) ShutdownWarnMessage() string {
+	if g.Spec.Shutdown == nil || g.Spec.Shutdown.WarnMessage == "" {
+		return DefaultShutdownWarnMessage
+	}
+	return g.Spec.Shutdown.WarnMessage
+}
+
+// EffectiveTerminationGracePeriodSeconds returns the pod's termination grace
+// period: the explicit spec value when set, otherwise the countdown plus
+// ShutdownGraceHeadroomSeconds so the preStop countdown cannot be cut off by the
+// kubelet.
+func (g *PalworldGame) EffectiveTerminationGracePeriodSeconds() int64 {
+	if g.Spec.TerminationGracePeriodSeconds != nil {
+		return *g.Spec.TerminationGracePeriodSeconds
+	}
+	return int64(g.ShutdownWarnSeconds()) + ShutdownGraceHeadroomSeconds
+}
+
 // PalworldGameSpec defines the desired state of a Palworld dedicated server.
 type PalworldGameSpec struct {
 	// Version pins the Steam build id of the Palworld dedicated server (Steam
@@ -99,6 +178,11 @@ type PalworldGameSpec struct {
 	// +optional
 	NodeDrain *NodeDrainPolicy `json:"nodeDrain,omitempty"`
 
+	// Shutdown configures the countdown players are given before the server
+	// stops. Applies to every termination, not just updates.
+	// +optional
+	Shutdown *ShutdownPolicy `json:"shutdown,omitempty"`
+
 	// Monitoring configures metrics and Prometheus integration.
 	// +optional
 	Monitoring MonitoringSpec `json:"monitoring,omitempty"`
@@ -108,9 +192,19 @@ type PalworldGameSpec struct {
 	// +optional
 	ServiceAccountName string `json:"serviceAccountName,omitempty"`
 
-	// TerminationGracePeriodSeconds is how long the pod is given to perform a
-	// graceful save-and-shutdown on stop. Defaults to 120s.
-	// +kubebuilder:default=120
+	// TerminationGracePeriodSeconds is how long the pod is given to warn players,
+	// save, and shut down cleanly.
+	//
+	// Leave unset: the operator derives Shutdown.WarnSeconds +
+	// ShutdownGraceHeadroomSeconds (600s with defaults), because the player
+	// countdown runs inside the preStop hook and the kubelet's grace clock covers
+	// preStop -- a budget shorter than the countdown means a SIGKILL mid-save.
+	// There is deliberately no CRD-level default: a fixed number here would
+	// silently win over the derivation and truncate the countdown.
+	//
+	// An explicit value is honoured verbatim. If it leaves less than
+	// ShutdownReserveSeconds of headroom the webhook warns and the container
+	// clamps the countdown to fit (spec 07).
 	// +optional
 	TerminationGracePeriodSeconds *int64 `json:"terminationGracePeriodSeconds,omitempty"`
 
@@ -240,6 +334,20 @@ type PalworldGameStatus struct {
 	// new build.
 	// +optional
 	NextScheduledUpdateCheck *metav1.Time `json:"nextScheduledUpdateCheck,omitempty"`
+
+	// UpdateDrainStartTime is when the pre-update player drain began, and doubles
+	// as the "a drain is in progress" flag. The reconciler cannot block, so the
+	// drain is a requeue loop and its deadline has to survive in status. Cleared
+	// once the pod is restarted or the pending update goes away.
+	// +optional
+	UpdateDrainStartTime *metav1.Time `json:"updateDrainStartTime,omitempty"`
+
+	// UpdateDrainLastWarnTime is when the drain warning was last broadcast. The
+	// controller is reconciled far more often than its own RequeueAfter, so
+	// re-broadcasts are gated on this timestamp instead of on reconcile entry --
+	// otherwise every reconcile would spam another chat message.
+	// +optional
+	UpdateDrainLastWarnTime *metav1.Time `json:"updateDrainLastWarnTime,omitempty"`
 }
 
 // +kubebuilder:object:root=true

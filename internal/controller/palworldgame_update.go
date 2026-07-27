@@ -19,6 +19,8 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -75,6 +77,7 @@ func (r *PalworldGameReconciler) reconcileUpdates(ctx context.Context, game *pal
 
 	updateAvailable := available != "" && available != game.Status.CurrentVersion
 	if !updateAvailable {
+		r.clearDrainState(game)
 		r.setCondition(game, palworldv1alpha1.ConditionUpdateAvailable, metav1.ConditionFalse, "UpToDate",
 			fmt.Sprintf("Running build %s", game.Status.CurrentVersion))
 		return ctrl.Result{}, nil
@@ -136,19 +139,19 @@ func (r *PalworldGameReconciler) performUpdate(ctx context.Context, game *palwor
 		}
 	}
 
-	// Warn players (best-effort).
-	if rc, err := restClientFor(ctx, r.Client, game); err == nil {
-		msg := game.Spec.Update.WarnMessage
-		if msg == "" {
-			msg = "Server will restart for updates shortly"
-		}
-		_ = rc.Announce(ctx, msg)
+	// Give players time to log off before the pod goes away. Returns false while
+	// the drain is still running, in which case we requeue and come back.
+	if done, res := r.drainUpdate(ctx, game); !done {
+		return res, nil
 	}
 
-	// Trigger a graceful restart by deleting the pod; preStop saves the world.
+	// Trigger a graceful restart by deleting the pod; preStop warns whoever is
+	// still connected and saves the world.
 	if err := r.restartServerPod(ctx, game); err != nil {
 		return ctrl.Result{}, err
 	}
+	game.Status.UpdateDrainStartTime = nil
+	game.Status.UpdateDrainLastWarnTime = nil
 
 	now := metav1.Now()
 	game.Status.LastUpdateTime = &now
@@ -157,6 +160,124 @@ func (r *PalworldGameReconciler) performUpdate(ctx context.Context, game *palwor
 		fmt.Sprintf("Updated to build %s", available))
 	r.Recorder.Eventf(game, corev1.EventTypeNormal, "Updated", "Applied build %s", available)
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+}
+
+// drainPollInterval is how often an in-progress drain is re-evaluated. Short
+// enough to notice the last player leaving promptly, and decoupled from the
+// re-broadcast cadence (which is time-gated on UpdateDrainLastWarnTime).
+const drainPollInterval = 15 * time.Second
+
+// drainUpdate waits for players to disconnect before the update restart.
+//
+// It reports done=true when the restart may proceed: immediately when draining is
+// disabled or nobody is connected, once the last player leaves, or once
+// drainTimeoutSeconds has elapsed. While the drain runs it returns done=false with
+// the requeue result to use -- the reconciler must never block, so the deadline
+// lives in status (UpdateDrainStartTime) across reconciles.
+//
+// Broadcasts are best-effort: a server we cannot reach over REST cannot be warned,
+// but the deadline still guarantees the update makes progress.
+func (r *PalworldGameReconciler) drainUpdate(ctx context.Context, game *palworldv1alpha1.PalworldGame) (bool, ctrl.Result) {
+	pol := game.Spec.Update
+	timeout := time.Duration(pol.DrainTimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		// No drain wait: warn once so players are not dropped in silence, then let
+		// the preStop countdown handle anyone still connected.
+		r.announceUpdateWarning(ctx, game, 0)
+		return true, ctrl.Result{}
+	}
+
+	now := time.Now()
+
+	// First entry: start the clock and warn.
+	if game.Status.UpdateDrainStartTime == nil {
+		if game.Status.PlayersOnline <= 0 {
+			// Nothing to drain; don't stall the rollout.
+			return true, ctrl.Result{}
+		}
+		start := metav1.NewTime(now)
+		game.Status.UpdateDrainStartTime = &start
+		r.announceUpdateWarning(ctx, game, int(pol.DrainTimeoutSeconds))
+		game.Status.UpdateDrainLastWarnTime = &start
+		r.Recorder.Eventf(game, corev1.EventTypeNormal, "DrainingPlayers",
+			"Waiting up to %ds for %d player(s) to disconnect before restarting",
+			pol.DrainTimeoutSeconds, game.Status.PlayersOnline)
+		r.setProgressing(game, "Draining",
+			fmt.Sprintf("Draining %d player(s), %ds remaining", game.Status.PlayersOnline, pol.DrainTimeoutSeconds))
+		return false, ctrl.Result{RequeueAfter: drainPollInterval}
+	}
+
+	// Everyone left: restart now rather than waiting out the timeout.
+	if game.Status.PlayersOnline <= 0 {
+		r.Recorder.Event(game, corev1.EventTypeNormal, "PlayersDrained",
+			"All players disconnected; proceeding with the update restart")
+		return true, ctrl.Result{}
+	}
+
+	deadline := game.Status.UpdateDrainStartTime.Time.Add(timeout)
+	if !now.Before(deadline) {
+		r.Recorder.Eventf(game, corev1.EventTypeNormal, "DrainTimeout",
+			"Drain timeout reached with %d player(s) still connected; restarting", game.Status.PlayersOnline)
+		return true, ctrl.Result{}
+	}
+
+	// Re-broadcast on the configured cadence only. This is gated on wall-clock
+	// time, not on reconcile entry: owned-object writes (and MetalLB's Service
+	// status rewrites on a LoadBalancer game) reconcile us far more often than
+	// drainPollInterval, and announcing per reconcile would spam chat.
+	remaining := int(time.Until(deadline).Round(time.Second).Seconds())
+	interval := time.Duration(updateWarnIntervalSeconds(pol)) * time.Second
+	if game.Status.UpdateDrainLastWarnTime == nil ||
+		!now.Before(game.Status.UpdateDrainLastWarnTime.Time.Add(interval)) {
+		r.announceUpdateWarning(ctx, game, remaining)
+		last := metav1.NewTime(now)
+		game.Status.UpdateDrainLastWarnTime = &last
+	}
+
+	r.setProgressing(game, "Draining",
+		fmt.Sprintf("Draining %d player(s), %ds remaining", game.Status.PlayersOnline, remaining))
+	return false, ctrl.Result{RequeueAfter: drainPollInterval}
+}
+
+// announceUpdateWarning broadcasts the update warning, substituting "%d" in
+// update.warnMessage with the seconds left in the drain. Best-effort: an
+// unreachable server must not stall or fail the rollout.
+func (r *PalworldGameReconciler) announceUpdateWarning(ctx context.Context, game *palworldv1alpha1.PalworldGame, remaining int) {
+	rc, err := restClientFor(ctx, r.Client, r.APIReader, game)
+	if err != nil {
+		return
+	}
+	_ = rc.Announce(ctx, renderUpdateWarning(game.Spec.Update.WarnMessage, remaining))
+}
+
+// renderUpdateWarning substitutes "%d" in an update warning with the seconds
+// remaining, falling back to a default when no message is configured.
+//
+// Substitution is a plain string replace rather than fmt.Sprintf: an operator's
+// message is free text and may contain a stray verb (a bare "%" or a "%s"), which
+// Sprintf would turn into "%!s(MISSING)" noise in players' chat.
+func renderUpdateWarning(template string, remaining int) string {
+	if template == "" {
+		template = "Server will restart for updates shortly"
+	}
+	return strings.ReplaceAll(template, "%d", strconv.Itoa(remaining))
+}
+
+// updateWarnIntervalSeconds is the drain re-broadcast cadence, defaulted for
+// objects persisted before the field existed.
+func updateWarnIntervalSeconds(pol *palworldv1alpha1.UpdatePolicy) int32 {
+	if pol.WarnIntervalSeconds < 1 {
+		return palworldv1alpha1.DefaultUpdateWarnIntervalSeconds
+	}
+	return pol.WarnIntervalSeconds
+}
+
+// clearDrainState drops any in-progress drain bookkeeping. Called when no update
+// is pending so an update that becomes unnecessary mid-drain (build re-pinned, a
+// manual restart) does not leave a stale deadline behind.
+func (r *PalworldGameReconciler) clearDrainState(game *palworldv1alpha1.PalworldGame) {
+	game.Status.UpdateDrainStartTime = nil
+	game.Status.UpdateDrainLastWarnTime = nil
 }
 
 // restartServerPod deletes the server pod so the StatefulSet recreates it.
