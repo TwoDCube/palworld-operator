@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -42,12 +43,33 @@ func hasAPI(ctx context.Context, c client.Client, gvk schema.GroupVersionKind) b
 	return err == nil
 }
 
+// credentialsReader picks the reader to use for a game's credentials Secret.
+//
+// The manager's Secret cache is filtered to objects labelled
+// app.kubernetes.io/managed-by=palworld-operator (see operatorCacheOptions in
+// cmd/main.go). The operator-generated Secret carries that label and is served
+// from cache; a user-supplied Secret (spec.credentials.secretName) does not, and
+// reading it through the cached client returns NotFound even though it exists.
+// Those reads go straight to the API server instead.
+//
+// uncached may be nil (unit tests, and any caller that has not wired an
+// APIReader); the cached client is then used for both cases, which is correct
+// whenever the cache is unfiltered.
+func credentialsReader(cached client.Client, uncached client.Reader, g *palworldv1alpha1.PalworldGame) client.Reader {
+	if g.Spec.Credentials.SecretName != "" && uncached != nil {
+		return uncached
+	}
+	return cached
+}
+
 // adminPassword fetches the admin password from the credentials Secret backing
-// the game.
-func adminPassword(ctx context.Context, c client.Client, g *palworldv1alpha1.PalworldGame) (string, error) {
+// the game. uncached is the manager's APIReader, used for user-supplied Secrets
+// that the filtered cache cannot see; see credentialsReader.
+func adminPassword(ctx context.Context, c client.Client, uncached client.Reader, g *palworldv1alpha1.PalworldGame) (string, error) {
 	secretName := resources.CredentialsSecretName(g)
 	var secret corev1.Secret
-	if err := c.Get(ctx, types.NamespacedName{Name: secretName, Namespace: g.Namespace}, &secret); err != nil {
+	reader := credentialsReader(c, uncached, g)
+	if err := reader.Get(ctx, types.NamespacedName{Name: secretName, Namespace: g.Namespace}, &secret); err != nil {
 		return "", err
 	}
 	key := resources.AdminPasswordKey(g)
@@ -64,8 +86,9 @@ func adminHost(g *palworldv1alpha1.PalworldGame) string {
 }
 
 // restClientFor builds a REST client targeting the game's admin service.
-func restClientFor(ctx context.Context, c client.Client, g *palworldv1alpha1.PalworldGame) (*palworld.RESTClient, error) {
-	pw, err := adminPassword(ctx, c, g)
+// uncached is the manager's APIReader; see adminPassword.
+func restClientFor(ctx context.Context, c client.Client, uncached client.Reader, g *palworldv1alpha1.PalworldGame) (*palworld.RESTClient, error) {
+	pw, err := adminPassword(ctx, c, uncached, g)
 	if err != nil {
 		return nil, err
 	}
@@ -73,8 +96,9 @@ func restClientFor(ctx context.Context, c client.Client, g *palworldv1alpha1.Pal
 }
 
 // rconClientFor builds an RCON client targeting the game's admin service.
-func rconClientFor(ctx context.Context, c client.Client, g *palworldv1alpha1.PalworldGame) (*palworld.RCONClient, error) {
-	pw, err := adminPassword(ctx, c, g)
+// uncached is the manager's APIReader; see adminPassword.
+func rconClientFor(ctx context.Context, c client.Client, uncached client.Reader, g *palworldv1alpha1.PalworldGame) (*palworld.RCONClient, error) {
+	pw, err := adminPassword(ctx, c, uncached, g)
 	if err != nil {
 		return nil, err
 	}
@@ -110,6 +134,9 @@ func reconcileService(ctx context.Context, c client.Client, owner *palworldv1alp
 			}
 		}
 	}
+	// Snapshot before mutating so an unchanged Service can skip the write.
+	before := existing.DeepCopy()
+
 	existing.Labels = desired.Labels
 	existing.Annotations = desired.Annotations
 	existing.Spec.Type = desired.Spec.Type
@@ -121,6 +148,17 @@ func reconcileService(ctx context.Context, c client.Client, owner *palworldv1alp
 	existing.Spec.LoadBalancerClass = desired.Spec.LoadBalancerClass
 	if err := controllerutil.SetControllerReference(owner, existing, scheme); err != nil {
 		return err
+	}
+
+	// Skip the write when nothing this operator manages actually changed.
+	// Without this, every reconcile re-PUTs all 3-4 Services. Those writes are
+	// usually no-ops server-side, but they are real API traffic and they make the
+	// operator an active writer on a Service that another controller co-owns
+	// (any LoadBalancer), which is exactly where write amplification bites.
+	// With the guard the operator's managedFields entry on a steady-state Service
+	// stops advancing at all.
+	if equality.Semantic.DeepEqual(before, existing) {
+		return nil
 	}
 	return c.Update(ctx, existing)
 }
@@ -144,7 +182,28 @@ func reconcileUnstructured(ctx context.Context, c client.Client, owner *palworld
 	if err := controllerutil.SetControllerReference(owner, desired, scheme); err != nil {
 		return err
 	}
+	// Same no-op guard as reconcileService: Routes and ServiceMonitors are also
+	// written by other controllers, so an unconditional Update here would start
+	// the same write/watch/reconcile loop. Only the fields this operator manages
+	// are compared — the live object additionally carries controller-written
+	// status and defaults that `desired` never sets.
+	if unstructuredManagedEqual(existing, desired) {
+		return nil
+	}
 	return c.Update(ctx, desired)
+}
+
+// unstructuredManagedEqual reports whether the fields this operator manages
+// (labels, annotations, ownerReferences and spec) already match the live object.
+// status and server-set metadata are ignored: they are owned by other actors and
+// comparing them would make every reconcile look like a change.
+func unstructuredManagedEqual(existing, desired *unstructured.Unstructured) bool {
+	if !equality.Semantic.DeepEqual(existing.GetLabels(), desired.GetLabels()) ||
+		!equality.Semantic.DeepEqual(existing.GetAnnotations(), desired.GetAnnotations()) ||
+		!equality.Semantic.DeepEqual(existing.GetOwnerReferences(), desired.GetOwnerReferences()) {
+		return false
+	}
+	return equality.Semantic.DeepEqual(existing.Object["spec"], desired.Object["spec"])
 }
 
 // containsString / removeString are small finalizer helpers.

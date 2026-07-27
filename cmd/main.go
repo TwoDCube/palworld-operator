@@ -25,12 +25,19 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -40,6 +47,7 @@ import (
 	palworldv1alpha1 "github.com/twodcube/palworld-operator/api/v1alpha1"
 	"github.com/twodcube/palworld-operator/internal/controller"
 	"github.com/twodcube/palworld-operator/internal/exporter"
+	"github.com/twodcube/palworld-operator/internal/resources"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -56,6 +64,62 @@ func init() {
 	// registration is required and the operator runs unchanged on vanilla
 	// Kubernetes.
 	// +kubebuilder:scaffold:scheme
+}
+
+// operatorCacheOptions builds the manager's informer cache configuration.
+//
+// The controller-runtime default caches every object of every watched type
+// across every namespace. For this operator that means all Secrets and
+// ConfigMaps on the cluster; on a cluster with ~1.5k Secrets and ~1.9k
+// ConfigMaps the initial LIST alone exceeds the manager's memory limit and the
+// process is OOMKilled seconds after it acquires the leader lease.
+//
+// Every object the operator creates carries
+// app.kubernetes.io/managed-by=palworld-operator (resources.CommonLabels), and
+// user-supplied podLabels cannot override it, so that label is a sound cache
+// filter for the types the operator only ever reads back its own objects from.
+//
+// Two deliberate exclusions:
+//
+//   - Node is NOT filtered. Drain detection looks up arbitrary nodes by name
+//     (spec 11) and nodes carry no operator label. Nodes are few and small.
+//   - A user-supplied credentials Secret (spec.credentials.secretName) carries
+//     no operator label and is therefore invisible to this cache. It is read
+//     through the manager's uncached APIReader instead — see
+//     controller.credentialsReader.
+//
+// The three PalworldGame/Backup/Restore kinds are likewise unfiltered: they are
+// the operator's own API and are exactly what it must discover.
+func operatorCacheOptions() cache.Options {
+	managed := cache.ByObject{
+		Label: labels.SelectorFromSet(labels.Set{
+			resources.LabelManagedBy: resources.ManagedByValue,
+		}),
+	}
+	// Deliberately NO DefaultTransform, and no per-object Transform.
+	//
+	// cache.TransformStripManagedFields() looks like free savings, but this
+	// operator does read-modify-write against the cache: reconcileService and
+	// reconcileUnstructured Get an object from the cached client, mutate it, and
+	// Update it back. A stripped cached copy would be written back with empty
+	// managedFields, forcing the API server to recompute field ownership on a
+	// write the operator did not intend to make. The label filter below is where
+	// the memory win comes from (290Mi -> ~35Mi observed on a 120-namespace
+	// cluster); the transform is not worth that hazard on top of it.
+	return cache.Options{
+		ByObject: map[client.Object]cache.ByObject{
+			&corev1.Secret{}:                managed,
+			&corev1.ConfigMap{}:             managed,
+			&corev1.Service{}:               managed,
+			&corev1.ServiceAccount{}:        managed,
+			&corev1.PersistentVolumeClaim{}: managed,
+			&corev1.Pod{}:                   managed,
+			&appsv1.StatefulSet{}:           managed,
+			&batchv1.Job{}:                  managed,
+			&policyv1.PodDisruptionBudget{}: managed,
+			&networkingv1.NetworkPolicy{}:   managed,
+		},
+	}
 }
 
 func main() {
@@ -199,7 +263,7 @@ func main() {
 		// speeds up voluntary leader transitions as the new leader don't have to wait
 		// LeaseDuration time first.
 		LeaderElectionReleaseOnCancel: true,
-		Cache:                         cache.Options{},
+		Cache:                         operatorCacheOptions(),
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")

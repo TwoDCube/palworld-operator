@@ -38,12 +38,28 @@ Derived from the game Service: `LoadBalancer` → `<ingress ip|hostname>:<gamePo
 `podSelector` = `SelectorLabels`; ingress rules:
 
 1. **game + query UDP** — open to all sources (no `from`).
-2. **rcon + rest TCP** — only from same-namespace pods (`podSelector: {}`) and
+2. **rcon TCP** (25575) — only from same-namespace pods (`podSelector: {}`) and
    the operator namespace (`namespaceSelector` on
-   `kubernetes.io/metadata.name = <OPERATOR_NAMESPACE>`).
-3. **metrics TCP** — open to all sources (Prometheus usually lives in a
+   `kubernetes.io/metadata.name = <OPERATOR_NAMESPACE>`). RCON is a raw,
+   unauthenticated-until-login admin channel and is **never** reachable from the
+   ingress router, regardless of `restAPI.route`.
+3. **rest TCP** (8212) — the same two peers as rcon, **plus**, when
+   `networking.restAPI.route` is true, the OpenShift ingress router
+   (`namespaceSelector` on `policy-group.network.openshift.io/ingress`, the label
+   OpenShift maintains on router namespaces).
+4. **metrics TCP** — open to all sources (Prometheus usually lives in a
    different namespace whose identity is not known here; metrics carry only
    non-sensitive data). Restrict further with your own policy if required.
+
+Rules 2 and 3 are deliberately separate. A single rule covering both ports would
+force the router peer onto RCON as well; splitting them keeps the router grant
+scoped to the one port the Route actually targets.
+
+Without rule 3's router peer a Route created by `restAPI.route: true` is
+answered with **HTTP 503** — the router runs in `openshift-ingress` and matches
+neither of the other two peers. The peer is added purely from the spec field, so
+it is inert on clusters without the Route API (the selector matches no
+namespace) and no Route is created there anyway.
 
 ## Route (`<name>-rest`, OpenShift only)
 

@@ -119,6 +119,22 @@ func (v *PalworldGameValidator) validate(game *PalworldGame) (admission.Warnings
 		}
 	}
 
+	// The player countdown runs inside the preStop hook, and the kubelet's grace
+	// clock covers preStop. An explicit grace period that cannot fit the countdown
+	// is honoured (the operator does not silently rewrite it) but the countdown
+	// gets clamped in the container, so say so rather than let players be cut off
+	// mid-warning. Only warn: rejecting would break objects that already carry the
+	// 120s value the CRD used to default.
+	if grace := game.Spec.TerminationGracePeriodSeconds; grace != nil {
+		warn := int64(game.ShutdownWarnSeconds())
+		if minimum := warn + ShutdownReserveSeconds; warn > 0 && *grace < minimum {
+			warnings = append(warnings, fmt.Sprintf(
+				"spec.terminationGracePeriodSeconds=%d cannot fit the %ds shutdown warning: "+
+					"players will only be warned for ~%ds. Set it to at least %d, or unset it to let the operator derive %d",
+				*grace, warn, max(*grace-ShutdownReserveSeconds, 0), minimum, warn+ShutdownGraceHeadroomSeconds))
+		}
+	}
+
 	// Networking sanity checks.
 	if game.Spec.Networking.RESTAPI.Route {
 		warnings = append(warnings, "spec.networking.restAPI.route only takes effect on clusters with the OpenShift Route API")

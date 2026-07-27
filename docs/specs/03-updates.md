@@ -54,14 +54,54 @@ returns true when `sched.Next(from) <= now`.
    `backup.destination` (or `VolumeSnapshot`), `flushSave: true`. Requeue every
    15s until it is `Completed`; a `Failed` pre-update backup emits a warning and
    does not block the update.
-3. Announce the warning to players via REST (`update.warnMessage`, or a default).
-4. `restartServerPod`: delete pod `<name>-0`. The StatefulSet recreates it and
-   the entrypoint installs the latest build; the `preStop` hook saves the world
-   first (spec 07).
+3. **Player drain** (`drainUpdate`), when `update.drainTimeoutSeconds > 0`. The
+   reconciler never sleeps; the drain is a requeue loop driven by two status
+   fields:
+   - First entry: set `status.updateDrainStartTime = now`, broadcast
+     `update.warnMessage`, set `status.updateDrainLastWarnTime = now`, emit a
+     `DrainingPlayers` event, requeue after 15s.
+   - Later entries: finish early when `status.playersOnline == 0` (emit
+     `PlayersDrained`); finish anyway once
+     `updateDrainStartTime + drainTimeoutSeconds` has passed (emit
+     `DrainTimeout`). Otherwise re-broadcast when at least
+     `update.warnIntervalSeconds` has elapsed since `updateDrainLastWarnTime`,
+     and requeue after 15s.
+   - `Progressing` reports `Draining N player(s), Ms remaining`.
+
+   Re-broadcasts are gated on `updateDrainLastWarnTime` rather than on reconcile
+   entry, because the controller is reconciled far more often than its own
+   `RequeueAfter` (any owned-object write, and on a `LoadBalancer` game MetalLB's
+   status rewrites — spec 02); announcing per reconcile would spam chat.
+
+   `%d` in `warnMessage` is replaced with the seconds remaining in the drain.
+   A failed REST metrics poll leaves `status.playersOnline` at its previous value
+   (spec 02), so an unreachable server drains for the full timeout rather than
+   restarting early.
+4. `restartServerPod`: delete pod `<name>-0`. Clear both drain status fields. The
+   StatefulSet recreates it and the entrypoint installs the latest build; the
+   `preStop` hook warns any remaining players, then saves the world (spec 07).
 5. Set `lastUpdateTime = now`, `currentVersion = available`,
    `UpdateAvailable=False/Updated`, emit an `Updated` event, requeue after 30s.
 
-There is no separate drain wait; `drainTimeoutSeconds` is exposed in the API but
-graceful draining is performed by the pod's `preStop`/`SIGTERM` handling on
-delete. Build pinning to arbitrary historical ids is not supported (SteamCMD
-installs the branch head).
+The drain state is cleared whenever no update is pending, so an update that
+becomes unnecessary mid-drain (build re-pinned, manual restart) does not leave a
+half-finished drain behind.
+
+### Drain vs. the preStop countdown
+
+These are two different mechanisms and they stack:
+
+- The **drain** waits for players to *leave voluntarily* before the pod is
+  deleted, and is update-only.
+- The **preStop countdown** (`shutdown.warnSeconds`, spec 07) warns whoever is
+  *still connected* at deletion, on every termination.
+
+In the common case players log off during the drain, so preStop finds an empty
+server and skips its countdown — the restart is immediate. If players ignore the
+drain entirely, the worst case is `drainTimeoutSeconds + shutdown.warnSeconds`
+(600s with both defaults), which fits inside the derived
+`terminationGracePeriodSeconds`. Set `drainTimeoutSeconds: 0` to restart as soon
+as the warning goes out and rely on the preStop countdown alone.
+
+Build pinning to arbitrary historical ids is not supported (SteamCMD installs the
+branch head).

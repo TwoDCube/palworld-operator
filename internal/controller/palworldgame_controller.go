@@ -52,6 +52,12 @@ type PalworldGameReconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
 
+	// APIReader reads straight from the API server, bypassing the manager's
+	// label-filtered cache. It is only needed for objects the operator does not
+	// label — currently a user-supplied credentials Secret (spec 09/10).
+	// Populated in SetupWithManager; may be nil in unit tests.
+	APIReader client.Reader
+
 	// Runtime configuration, populated in SetupWithManager from the environment.
 	OperatorNamespace  string
 	OperatorImage      string
@@ -360,6 +366,9 @@ func (r *PalworldGameReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	if r.SteamInfoEndpoint == "" {
 		r.SteamInfoEndpoint = os.Getenv("STEAM_INFO_ENDPOINT")
+	}
+	if r.APIReader == nil {
+		r.APIReader = mgr.GetAPIReader()
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&palworldv1alpha1.PalworldGame{}).

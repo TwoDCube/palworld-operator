@@ -2675,6 +2675,40 @@ spec:
                   ServiceAccountName is the ServiceAccount for the server pod. When empty
                   the operator creates and manages a dedicated ServiceAccount.
                 type: string
+              shutdown:
+                description: |-
+                  Shutdown configures the countdown players are given before the server
+                  stops. Applies to every termination, not just updates.
+                properties:
+                  warnIntervalSeconds:
+                    default: 60
+                    description: |-
+                      WarnIntervalSeconds is how often the countdown is re-broadcast while
+                      WarnSeconds runs down. The default warns once a minute, so players who
+                      joined mid-countdown or missed the first message still see one.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  warnMessage:
+                    default: Server is shutting down for maintenance in %s
+                    description: |-
+                      WarnMessage is broadcast on every countdown tick. "%s" is replaced with a
+                      human-readable remaining time ("5 minutes", "1 minute", "30 seconds") and
+                      "%d" with the remaining whole seconds. Both may be used; neither is
+                      required.
+                    type: string
+                  warnSeconds:
+                    default: 300
+                    description: |-
+                      WarnSeconds is how long players are warned before the world is flushed and
+                      the server stops. 0 stops immediately after a single announcement.
+
+                      Because the countdown consumes the pod's termination grace period, raising
+                      this also raises the derived TerminationGracePeriodSeconds.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                type: object
               sidecars:
                 description: |-
                   Sidecars are additional containers to run alongside the server (e.g. a
@@ -4139,10 +4173,20 @@ spec:
                     type: string
                 type: object
               terminationGracePeriodSeconds:
-                default: 120
                 description: |-
-                  TerminationGracePeriodSeconds is how long the pod is given to perform a
-                  graceful save-and-shutdown on stop. Defaults to 120s.
+                  TerminationGracePeriodSeconds is how long the pod is given to warn players,
+                  save, and shut down cleanly.
+
+                  Leave unset: the operator derives Shutdown.WarnSeconds +
+                  ShutdownGraceHeadroomSeconds (600s with defaults), because the player
+                  countdown runs inside the preStop hook and the kubelet's grace clock covers
+                  preStop -- a budget shorter than the countdown means a SIGKILL mid-save.
+                  There is deliberately no CRD-level default: a fixed number here would
+                  silently win over the derivation and truncate the countdown.
+
+                  An explicit value is honoured verbatim. If it leaves less than
+                  ShutdownReserveSeconds of headroom the webhook warns and the container
+                  clamps the countdown to fit (spec 07).
                 format: int64
                 type: integer
               update:
@@ -4157,7 +4201,14 @@ spec:
                     default: 300
                     description: |-
                       DrainTimeoutSeconds is how long to wait for players to disconnect after
-                      broadcasting an update warning before forcing a restart.
+                      broadcasting an update warning before forcing a restart. The wait ends early
+                      as soon as the last player leaves. 0 restarts immediately after the warning
+                      and leaves warning stragglers to the preStop countdown (ShutdownPolicy).
+
+                      This stacks with ShutdownPolicy.WarnSeconds: the drain waits for players to
+                      leave voluntarily, the preStop countdown warns whoever is still connected
+                      when the pod is finally deleted. Players who log off during the drain leave
+                      an empty server, and preStop then skips its countdown entirely.
                     format: int32
                     minimum: 0
                     type: integer
@@ -4181,11 +4232,22 @@ spec:
                     - Automatic
                     - Scheduled
                     type: string
+                  warnIntervalSeconds:
+                    default: 60
+                    description: |-
+                      WarnIntervalSeconds is how often WarnMessage is re-broadcast while the drain
+                      runs down. Kept separate from ShutdownPolicy.WarnIntervalSeconds because the
+                      two cover different phases (waiting for players to leave vs. counting down a
+                      termination already under way) and operators may well want different
+                      cadences.
+                    format: int32
+                    minimum: 1
+                    type: integer
                   warnMessage:
                     default: Server will restart for updates in %d seconds
                     description: |-
                       WarnMessage is broadcast to players before an update restart. It may
-                      contain "%d" which is replaced with the remaining seconds.
+                      contain "%d" which is replaced with the seconds left in the drain.
                     type: string
                 type: object
               version:
@@ -4365,6 +4427,22 @@ spec:
                 description: |-
                   ServerVersion is the human-readable in-game version reported by the REST
                   API (e.g. "v0.3.5"). Display only; not used for update comparisons.
+                type: string
+              updateDrainLastWarnTime:
+                description: |-
+                  UpdateDrainLastWarnTime is when the drain warning was last broadcast. The
+                  controller is reconciled far more often than its own RequeueAfter, so
+                  re-broadcasts are gated on this timestamp instead of on reconcile entry --
+                  otherwise every reconcile would spam another chat message.
+                format: date-time
+                type: string
+              updateDrainStartTime:
+                description: |-
+                  UpdateDrainStartTime is when the pre-update player drain began, and doubles
+                  as the "a drain is in progress" flag. The reconciler cannot block, so the
+                  drain is a requeue loop and its deadline has to survive in status. Cleared
+                  once the pod is restarted or the pending update goes away.
+                format: date-time
                 type: string
             type: object
         type: object

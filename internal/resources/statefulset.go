@@ -154,6 +154,13 @@ func serverEnv(g *palworldv1alpha1.PalworldGame) []corev1.EnvVar {
 		{Name: "MULTITHREAD_ENABLED", Value: "true"},
 		{Name: "SETTINGS_SOURCE", Value: ConfigMountPath + "/PalWorldSettings.ini"},
 		{Name: "STEAM_BRANCH", Value: "public"},
+		// Shutdown countdown, consumed by graceful-shutdown.sh in the preStop hook
+		// (spec 07). SHUTDOWN_GRACE_SECONDS lets the script clamp its own countdown
+		// to the pod's real kubelet budget rather than being SIGKILLed mid-save.
+		{Name: "SHUTDOWN_WARN_SECONDS", Value: strconv.Itoa(int(g.ShutdownWarnSeconds()))},
+		{Name: "SHUTDOWN_WARN_INTERVAL_SECONDS", Value: strconv.Itoa(int(g.ShutdownWarnIntervalSeconds()))},
+		{Name: "SHUTDOWN_WARN_MESSAGE", Value: g.ShutdownWarnMessage()},
+		{Name: "SHUTDOWN_GRACE_SECONDS", Value: strconv.FormatInt(g.EffectiveTerminationGracePeriodSeconds(), 10)},
 		secretEnv("ADMIN_PASSWORD", secretName, AdminPasswordKey(g), optional),
 		secretEnv("SERVER_PASSWORD", secretName, ServerPasswordKey(g), optional),
 	}
@@ -270,10 +277,10 @@ func DesiredStatefulSet(g *palworldv1alpha1.PalworldGame, p BuildParams, setting
 	labels := CommonLabels(g)
 	selector := SelectorLabels(g)
 
-	grace := int64(120)
-	if g.Spec.TerminationGracePeriodSeconds != nil {
-		grace = *g.Spec.TerminationGracePeriodSeconds
-	}
+	// Sized to outlast the preStop player countdown (spec 02/07): the kubelet's
+	// grace clock covers preStop, so a budget shorter than the countdown means the
+	// pod is SIGKILLed before the world is saved.
+	grace := g.EffectiveTerminationGracePeriodSeconds()
 
 	podAnnotations := map[string]string{
 		AnnotationSettingsHash: settingsHash,

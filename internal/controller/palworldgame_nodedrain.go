@@ -121,7 +121,7 @@ func (r *PalworldGameReconciler) reconcileNodeDrain(ctx context.Context, game *p
 
 	// Grace elapsed: flush a save and delete the pod so it reschedules off the
 	// draining node. The pod's preStop hook performs the final save+shutdown.
-	if rc, err := restClientFor(ctx, r.Client, game); err == nil {
+	if rc, err := restClientFor(ctx, r.Client, r.APIReader, game); err == nil {
 		_ = rc.Announce(ctx, "Server is migrating to another node; reconnect in a moment.")
 		_ = rc.Save(ctx)
 	}
@@ -135,7 +135,7 @@ func (r *PalworldGameReconciler) reconcileNodeDrain(ctx context.Context, game *p
 }
 
 func (r *PalworldGameReconciler) broadcastDrainWarning(ctx context.Context, game *palworldv1alpha1.PalworldGame, grace time.Duration) {
-	rc, err := restClientFor(ctx, r.Client, game)
+	rc, err := restClientFor(ctx, r.Client, r.APIReader, game)
 	if err != nil {
 		return
 	}

@@ -92,7 +92,7 @@ func (r *PalworldGameReconciler) reconcileObservedStatus(ctx context.Context, ga
 
 // observeLive queries the REST API for players/version and finalizes phase.
 func (r *PalworldGameReconciler) observeLive(ctx context.Context, game *palworldv1alpha1.PalworldGame) {
-	rc, err := restClientFor(ctx, r.Client, game)
+	rc, err := restClientFor(ctx, r.Client, r.APIReader, game)
 	if err != nil {
 		game.Status.Phase = palworldv1alpha1.PhaseRunning
 		r.setReady(game, true, "Running", "Server pod is ready")

@@ -44,6 +44,10 @@ type PalworldBackupReconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
 
+	// APIReader bypasses the manager's label-filtered cache; see
+	// PalworldGameReconciler.APIReader.
+	APIReader client.Reader
+
 	DefaultServerImage string
 
 	capOnce     sync.Once
@@ -114,7 +118,7 @@ func (r *PalworldBackupReconciler) start(ctx context.Context, backup *palworldv1
 	// Flush the world to disk for an application-consistent backup.
 	if backup.Spec.FlushSave {
 		backup.Status.Phase = palworldv1alpha1.BackupPhaseSaving
-		if rc, err := restClientFor(ctx, r.Client, game); err == nil {
+		if rc, err := restClientFor(ctx, r.Client, r.APIReader, game); err == nil {
 			if err := rc.Save(ctx); err != nil {
 				log.FromContext(ctx).Info("flush save failed; continuing with crash-consistent backup", "error", err.Error())
 			} else {
@@ -336,6 +340,9 @@ func (r *PalworldBackupReconciler) serverImage() string {
 func (r *PalworldBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.DefaultServerImage == "" {
 		r.DefaultServerImage = envOr("DEFAULT_SERVER_IMAGE", defaultServerImageFallback)
+	}
+	if r.APIReader == nil {
+		r.APIReader = mgr.GetAPIReader()
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&palworldv1alpha1.PalworldBackup{}).

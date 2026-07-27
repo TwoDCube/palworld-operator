@@ -51,13 +51,21 @@ const (
 const (
 	labelName      = "app.kubernetes.io/name"
 	labelInstance  = "app.kubernetes.io/instance"
-	labelManagedBy = "app.kubernetes.io/managed-by"
 	labelComponent = "app.kubernetes.io/component"
 	labelPartOf    = "app.kubernetes.io/part-of"
 	labelGame      = "palworld.twodcube.io/game"
 
-	managedByValue = "palworld-operator"
-	appName        = "palworld"
+	appName = "palworld"
+)
+
+// LabelManagedBy / ManagedByValue mark every object the operator creates.
+// CommonLabels applies them last, so user-supplied podLabels cannot override
+// them. They are exported because the manager scopes its informer cache to this
+// label (spec 10) and must do so from the same source of truth that writes it —
+// a drift between the two would silently empty the cache.
+const (
+	LabelManagedBy = "app.kubernetes.io/managed-by"
+	ManagedByValue = "palworld-operator"
 )
 
 // Names of the child objects for a game.
@@ -95,7 +103,7 @@ func CommonLabels(g *palworldv1alpha1.PalworldGame) map[string]string {
 	}
 	l[labelName] = appName
 	l[labelInstance] = g.Name
-	l[labelManagedBy] = managedByValue
+	l[LabelManagedBy] = ManagedByValue
 	l[labelComponent] = "server"
 	l[labelPartOf] = appName
 	l[labelGame] = g.Name

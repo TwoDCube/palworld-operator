@@ -16,6 +16,40 @@ paths. It registers the `PalworldGame`, `PalworldBackup`, and `PalworldRestore`
 reconcilers, and — only when `--enable-webhooks` is set — the `PalworldGame`
 validating webhook.
 
+### Cache scoping (`operatorCacheOptions`)
+
+The manager cache is **not** the controller-runtime default. An unfiltered
+cluster-wide cache holds every Secret and ConfigMap on the cluster, which on a
+real cluster (~1.5k Secrets / ~1.9k ConfigMaps across ~120 namespaces) exceeds
+the manager's memory limit during the initial LIST and OOMKills it.
+
+`operatorCacheOptions()` returns a `cache.Options` that:
+
+- restricts these types to objects carrying
+  `app.kubernetes.io/managed-by=palworld-operator` — the label `CommonLabels`
+  puts on everything the operator creates, and which user `podLabels` cannot
+  override (spec 02):
+
+  `Secret`, `ConfigMap`, `Service`, `ServiceAccount`, `PersistentVolumeClaim`,
+  `Pod`, `StatefulSet`, `Job`, `PodDisruptionBudget`, `NetworkPolicy`.
+
+`Node` is deliberately **left unfiltered**: drain detection reads arbitrary nodes
+by name (spec 11) and nodes carry no operator label. The three CR kinds are also
+unfiltered — they are the operator's own API and are what it must discover.
+
+The one object the operator reads but does not label is a user-supplied
+credentials Secret (`spec.credentials.secretName`); it is read through the
+uncached `APIReader` instead (spec 09).
+
+**No cache transform.** `DefaultTransform` is deliberately nil, and no `ByObject`
+entry sets `Transform`. `cache.TransformStripManagedFields()` in particular is not
+used: `reconcileService` and `reconcileUnstructured` read an object from the
+cached client, mutate it, and `Update` it back, so a stripped cached copy would be
+written back with empty `managedFields` and force the API server to recompute
+field ownership. The label filter alone accounts for the memory win (290Mi →
+~35Mi observed on a 120-namespace cluster). `cmd/main_test.go` asserts the
+transforms stay nil.
+
 ## Metrics exporter (`/manager exporter`)
 
 Serves `/healthz` and `/metrics` on `EXPORTER_ADDR` (default `:9877`), scraping
@@ -38,7 +72,12 @@ ServiceAccount `controller-manager`. Pod securityContext `runAsNonRoot` +
 Image `controller:latest`; args `--leader-elect`,
 `--health-probe-bind-address=:8081`, `--metrics-bind-address=:8443`,
 `--metrics-secure`. Ports `metrics` 8443, `health` 8081; liveness/readiness on
-`/healthz` and `/readyz`. Requests cpu `10m` / mem `128Mi`, limit mem `256Mi`.
+`/healthz` and `/readyz`. Requests cpu `10m` / mem `128Mi`, limit mem `512Mi`.
+
+The limit is sized against the scoped cache above, with headroom for the
+unfiltered `Node` informer on large clusters. It is **not** safe to lower it
+back toward the cache's steady-state footprint: the initial LIST is the peak, not
+the steady state.
 
 Env: `OPERATOR_NAMESPACE` (downward API `metadata.namespace`), `POD_NAME`
 (downward API), `OPERATOR_IMAGE` (kept equal to the manager image by a kustomize

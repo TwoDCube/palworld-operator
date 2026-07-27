@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	palworldv1alpha1 "github.com/twodcube/palworld-operator/api/v1alpha1"
@@ -172,5 +173,264 @@ func TestGameServiceType(t *testing.T) {
 	admin := DesiredAdminService(g)
 	if admin.Spec.Type != corev1.ServiceTypeClusterIP {
 		t.Errorf("admin service must be ClusterIP, got %s", admin.Spec.Type)
+	}
+}
+
+// findRuleByPort returns the single ingress rule exposing the given TCP port.
+// It fails the test if the port appears in zero or several rules, which is
+// itself the property the NetworkPolicy tests below rely on: each admin port
+// gets exactly one rule, so a peer added for one port cannot leak onto another.
+func findRuleByPort(t *testing.T, np *networkingv1.NetworkPolicy, port int32) networkingv1.NetworkPolicyIngressRule {
+	t.Helper()
+	var found []networkingv1.NetworkPolicyIngressRule
+	for _, rule := range np.Spec.Ingress {
+		for _, p := range rule.Ports {
+			if p.Port != nil && p.Port.IntVal == port {
+				found = append(found, rule)
+				break
+			}
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("expected exactly 1 ingress rule for port %d, got %d", port, len(found))
+	}
+	return found[0]
+}
+
+// hasRouterPeer reports whether any peer selects the OpenShift ingress router
+// namespace.
+func hasRouterPeer(rule networkingv1.NetworkPolicyIngressRule) bool {
+	for _, peer := range rule.From {
+		if peer.NamespaceSelector == nil {
+			continue
+		}
+		if _, ok := peer.NamespaceSelector.MatchLabels[IngressRouterNamespaceLabel]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func TestNetworkPolicyGamePortsOpenToAll(t *testing.T) {
+	np := DesiredNetworkPolicy(testGame(), "operator-ns")
+	rule := findRuleByPort(t, np, DefaultGamePort)
+	if len(rule.From) != 0 {
+		t.Errorf("game UDP port must be open to all sources, got %d peers", len(rule.From))
+	}
+}
+
+// Without a Route the REST port must keep the original narrow peer list; adding
+// the router unconditionally would expose the admin API on every cluster.
+func TestNetworkPolicyNoRouterPeerWhenRouteDisabled(t *testing.T) {
+	g := testGame()
+	g.Spec.Networking.RESTAPI.Route = false
+	np := DesiredNetworkPolicy(g, "operator-ns")
+
+	if hasRouterPeer(findRuleByPort(t, np, RESTPort)) {
+		t.Errorf("REST rule must not admit the ingress router when restAPI.route is false")
+	}
+	if hasRouterPeer(findRuleByPort(t, np, RCONPort)) {
+		t.Errorf("RCON rule must never admit the ingress router")
+	}
+}
+
+// The regression this fixes: with restAPI.route enabled the router could not
+// reach 8212 and the Route answered 503.
+func TestNetworkPolicyRouterPeerWhenRouteEnabled(t *testing.T) {
+	g := testGame()
+	g.Spec.Networking.RESTAPI.Route = true
+	np := DesiredNetworkPolicy(g, "operator-ns")
+
+	if !hasRouterPeer(findRuleByPort(t, np, RESTPort)) {
+		t.Errorf("REST rule must admit the ingress router when restAPI.route is true")
+	}
+}
+
+// RCON is a raw admin channel: enabling the REST Route must not widen it. This
+// also guards the slice-aliasing hazard — restFrom is built by copy, so
+// appending the router peer cannot write into the array backing adminFrom.
+func TestNetworkPolicyRCONNeverAdmitsRouter(t *testing.T) {
+	g := testGame()
+	g.Spec.Networking.RESTAPI.Route = true
+	np := DesiredNetworkPolicy(g, "operator-ns")
+
+	rcon := findRuleByPort(t, np, RCONPort)
+	if hasRouterPeer(rcon) {
+		t.Fatalf("RCON rule admits the ingress router: %+v", rcon.From)
+	}
+	if len(rcon.From) != 2 {
+		t.Errorf("RCON rule should keep exactly its 2 admin peers, got %d", len(rcon.From))
+	}
+}
+
+// Enabling the Route must add the router peer, not replace the existing ones —
+// the operator itself reaches REST from its own namespace.
+func TestNetworkPolicyRestKeepsAdminPeersWithRoute(t *testing.T) {
+	g := testGame()
+	g.Spec.Networking.RESTAPI.Route = true
+	np := DesiredNetworkPolicy(g, "operator-ns")
+
+	rule := findRuleByPort(t, np, RESTPort)
+	if len(rule.From) != 3 {
+		t.Fatalf("expected 3 REST peers (same-ns, operator-ns, router), got %d", len(rule.From))
+	}
+	var sameNS, operatorNS bool
+	for _, peer := range rule.From {
+		if peer.PodSelector != nil && len(peer.PodSelector.MatchLabels) == 0 {
+			sameNS = true
+		}
+		if peer.NamespaceSelector != nil &&
+			peer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] == "operator-ns" {
+			operatorNS = true
+		}
+	}
+	if !sameNS {
+		t.Errorf("REST rule lost the same-namespace peer")
+	}
+	if !operatorNS {
+		t.Errorf("REST rule lost the operator-namespace peer")
+	}
+}
+
+// The manager scopes its cache to this label (spec 10); if CommonLabels ever
+// stopped emitting it the cache would silently go empty.
+func TestCommonLabelsAlwaysCarriesManagedBy(t *testing.T) {
+	g := testGame()
+	// A user trying to override the reserved label must not win.
+	g.Spec.PodLabels = map[string]string{LabelManagedBy: "someone-else"}
+	if got := CommonLabels(g)[LabelManagedBy]; got != ManagedByValue {
+		t.Errorf("managed-by label = %q, want %q", got, ManagedByValue)
+	}
+}
+
+// envOf returns the server container's env as a map for assertions.
+func envOf(t *testing.T, g *palworldv1alpha1.PalworldGame) map[string]string {
+	t.Helper()
+	sts := DesiredStatefulSet(g, BuildParams{DefaultServerImage: "img"}, "h")
+	got := map[string]string{}
+	for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
+		got[e.Name] = e.Value
+	}
+	return got
+}
+
+// The countdown runs inside preStop and the kubelet's grace clock covers preStop,
+// so an unset grace period must be derived from the warning -- never a fixed
+// number that could be shorter than the countdown.
+func TestTerminationGracePeriodDerivedFromShutdownWarning(t *testing.T) {
+	g := testGame()
+	sts := DesiredStatefulSet(g, BuildParams{DefaultServerImage: "img"}, "h")
+	got := *sts.Spec.Template.Spec.TerminationGracePeriodSeconds
+	want := int64(palworldv1alpha1.DefaultShutdownWarnSeconds) + palworldv1alpha1.ShutdownGraceHeadroomSeconds
+	if got != want {
+		t.Errorf("derived terminationGracePeriodSeconds = %d, want %d", got, want)
+	}
+	if got <= int64(palworldv1alpha1.DefaultShutdownWarnSeconds) {
+		t.Errorf("grace period %d does not outlast the %ds countdown", got, palworldv1alpha1.DefaultShutdownWarnSeconds)
+	}
+}
+
+func TestTerminationGracePeriodTracksCustomWarning(t *testing.T) {
+	g := testGame()
+	g.Spec.Shutdown = &palworldv1alpha1.ShutdownPolicy{WarnSeconds: 900}
+	sts := DesiredStatefulSet(g, BuildParams{DefaultServerImage: "img"}, "h")
+	if got, want := *sts.Spec.Template.Spec.TerminationGracePeriodSeconds,
+		int64(900)+palworldv1alpha1.ShutdownGraceHeadroomSeconds; got != want {
+		t.Errorf("terminationGracePeriodSeconds = %d, want %d", got, want)
+	}
+}
+
+func TestTerminationGracePeriodExplicitWins(t *testing.T) {
+	g := testGame()
+	explicit := int64(45)
+	g.Spec.TerminationGracePeriodSeconds = &explicit
+	sts := DesiredStatefulSet(g, BuildParams{DefaultServerImage: "img"}, "h")
+	if got := *sts.Spec.Template.Spec.TerminationGracePeriodSeconds; got != explicit {
+		t.Errorf("explicit terminationGracePeriodSeconds = %d, want %d", got, explicit)
+	}
+}
+
+// graceful-shutdown.sh reads the countdown entirely from env, so a missing or
+// wrong variable silently disables the player warning.
+func TestShutdownEnvDefaults(t *testing.T) {
+	env := envOf(t, testGame())
+	want := map[string]string{
+		"SHUTDOWN_WARN_SECONDS":          "300",
+		"SHUTDOWN_WARN_INTERVAL_SECONDS": "60",
+		"SHUTDOWN_WARN_MESSAGE":          palworldv1alpha1.DefaultShutdownWarnMessage,
+		"SHUTDOWN_GRACE_SECONDS":         "600",
+	}
+	for k, v := range want {
+		if env[k] != v {
+			t.Errorf("env %s = %q, want %q", k, env[k], v)
+		}
+	}
+}
+
+func TestShutdownEnvFromPolicy(t *testing.T) {
+	g := testGame()
+	g.Spec.Shutdown = &palworldv1alpha1.ShutdownPolicy{
+		WarnSeconds:         120,
+		WarnIntervalSeconds: 30,
+		WarnMessage:         "back in %s",
+	}
+	env := envOf(t, g)
+	want := map[string]string{
+		"SHUTDOWN_WARN_SECONDS":          "120",
+		"SHUTDOWN_WARN_INTERVAL_SECONDS": "30",
+		"SHUTDOWN_WARN_MESSAGE":          "back in %s",
+		"SHUTDOWN_GRACE_SECONDS":         "420",
+	}
+	for k, v := range want {
+		if env[k] != v {
+			t.Errorf("env %s = %q, want %q", k, env[k], v)
+		}
+	}
+}
+
+// SHUTDOWN_GRACE_SECONDS is what lets the container clamp its countdown to the
+// pod's real budget, so it must match the pod spec exactly.
+func TestShutdownGraceEnvMatchesPodSpec(t *testing.T) {
+	g := testGame()
+	explicit := int64(90)
+	g.Spec.TerminationGracePeriodSeconds = &explicit
+	sts := DesiredStatefulSet(g, BuildParams{DefaultServerImage: "img"}, "h")
+	var graceEnv string
+	for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
+		if e.Name == "SHUTDOWN_GRACE_SECONDS" {
+			graceEnv = e.Value
+		}
+	}
+	if graceEnv != "90" {
+		t.Errorf("SHUTDOWN_GRACE_SECONDS = %q, want %q", graceEnv, "90")
+	}
+}
+
+// extraEnv is appended last so an operator can still override the countdown.
+func TestExtraEnvCanOverrideShutdownWarning(t *testing.T) {
+	g := testGame()
+	g.Spec.ExtraEnv = []corev1.EnvVar{{Name: "SHUTDOWN_WARN_SECONDS", Value: "10"}}
+	sts := DesiredStatefulSet(g, BuildParams{DefaultServerImage: "img"}, "h")
+	env := sts.Spec.Template.Spec.Containers[0].Env
+	var last string
+	for _, e := range env {
+		if e.Name == "SHUTDOWN_WARN_SECONDS" {
+			last = e.Value
+		}
+	}
+	if last != "10" {
+		t.Errorf("last SHUTDOWN_WARN_SECONDS = %q, want %q (extraEnv must win)", last, "10")
+	}
+}
+
+// The countdown only runs if preStop actually invokes the script.
+func TestPreStopRunsGracefulShutdown(t *testing.T) {
+	sts := DesiredStatefulSet(testGame(), BuildParams{DefaultServerImage: "img"}, "h")
+	lc := sts.Spec.Template.Spec.Containers[0].Lifecycle
+	if lc == nil || lc.PreStop == nil || lc.PreStop.Exec == nil {
+		t.Fatal("server container has no preStop exec hook")
+	}
+	if got := lc.PreStop.Exec.Command; len(got) != 1 || !strings.HasSuffix(got[0], "graceful-shutdown.sh") {
+		t.Errorf("preStop command = %v, want graceful-shutdown.sh", got)
 	}
 }

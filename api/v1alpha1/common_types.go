@@ -345,17 +345,34 @@ type UpdatePolicy struct {
 	Schedule string `json:"schedule,omitempty"`
 
 	// DrainTimeoutSeconds is how long to wait for players to disconnect after
-	// broadcasting an update warning before forcing a restart.
+	// broadcasting an update warning before forcing a restart. The wait ends early
+	// as soon as the last player leaves. 0 restarts immediately after the warning
+	// and leaves warning stragglers to the preStop countdown (ShutdownPolicy).
+	//
+	// This stacks with ShutdownPolicy.WarnSeconds: the drain waits for players to
+	// leave voluntarily, the preStop countdown warns whoever is still connected
+	// when the pod is finally deleted. Players who log off during the drain leave
+	// an empty server, and preStop then skips its countdown entirely.
 	// +kubebuilder:default=300
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	DrainTimeoutSeconds int32 `json:"drainTimeoutSeconds,omitempty"`
 
 	// WarnMessage is broadcast to players before an update restart. It may
-	// contain "%d" which is replaced with the remaining seconds.
+	// contain "%d" which is replaced with the seconds left in the drain.
 	// +kubebuilder:default="Server will restart for updates in %d seconds"
 	// +optional
 	WarnMessage string `json:"warnMessage,omitempty"`
+
+	// WarnIntervalSeconds is how often WarnMessage is re-broadcast while the drain
+	// runs down. Kept separate from ShutdownPolicy.WarnIntervalSeconds because the
+	// two cover different phases (waiting for players to leave vs. counting down a
+	// termination already under way) and operators may well want different
+	// cadences.
+	// +kubebuilder:default=60
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	WarnIntervalSeconds int32 `json:"warnIntervalSeconds,omitempty"`
 
 	// BackupBeforeUpdate takes a backup before applying an update.
 	// +kubebuilder:default=true
@@ -407,6 +424,42 @@ type NodeDrainPolicy struct {
 	// WarnMessage is broadcast to players when a drain is detected. It may
 	// contain "%d", which is replaced with the remaining seconds.
 	// +kubebuilder:default="Server node maintenance: migrating in %d seconds, please reach a safe spot"
+	// +optional
+	WarnMessage string `json:"warnMessage,omitempty"`
+}
+
+// ShutdownPolicy configures the countdown players get before the server stops.
+//
+// This is enforced by the server container's preStop hook (spec 07), not by a
+// controller code path, because preStop is the one thing that runs on *every*
+// termination: a settings change rolling the StatefulSet, an update, a node
+// drain, a manual pod delete, or a scale to zero. Putting the countdown in a
+// reconciler would only cover the paths the operator itself initiates and would
+// still let a plain `oc delete pod` cut players off without notice.
+type ShutdownPolicy struct {
+	// WarnSeconds is how long players are warned before the world is flushed and
+	// the server stops. 0 stops immediately after a single announcement.
+	//
+	// Because the countdown consumes the pod's termination grace period, raising
+	// this also raises the derived TerminationGracePeriodSeconds.
+	// +kubebuilder:default=300
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	WarnSeconds int32 `json:"warnSeconds,omitempty"`
+
+	// WarnIntervalSeconds is how often the countdown is re-broadcast while
+	// WarnSeconds runs down. The default warns once a minute, so players who
+	// joined mid-countdown or missed the first message still see one.
+	// +kubebuilder:default=60
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	WarnIntervalSeconds int32 `json:"warnIntervalSeconds,omitempty"`
+
+	// WarnMessage is broadcast on every countdown tick. "%s" is replaced with a
+	// human-readable remaining time ("5 minutes", "1 minute", "30 seconds") and
+	// "%d" with the remaining whole seconds. Both may be used; neither is
+	// required.
+	// +kubebuilder:default="Server is shutting down for maintenance in %s"
 	// +optional
 	WarnMessage string `json:"warnMessage,omitempty"`
 }
