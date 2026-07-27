@@ -1,0 +1,14 @@
+# OpenShift deployment overlay.
+#
+# The operator auto-detects OpenShift at runtime (via the Route API) and:
+#   * omits explicit UID/GID/fsGroup on game pods so the restricted-v2 SCC can
+#     inject them (the bundled server image is arbitrary-UID compatible), and
+#   * creates OpenShift Routes for the REST API when requested.
+#
+# The bundled server image runs cleanly under the default restricted-v2 SCC, so
+# no custom SecurityContextConstraints is required. If your cluster has a
+# hardened restricted-v2, apply the optional SCC in ../scc.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- ../default

@@ -1,0 +1,239 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  name: palworldrestores.palworld.twodcube.io
+spec:
+  group: palworld.twodcube.io
+  names:
+    categories:
+    - palworld
+    kind: PalworldRestore
+    listKind: PalworldRestoreList
+    plural: palworldrestores
+    shortNames:
+    - pwrestore
+    - pwrs
+    singular: palworldrestore
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.gameRef
+      name: Game
+      type: string
+    - jsonPath: .spec.backupRef
+      name: Backup
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: PalworldRestore restores a PalworldBackup into a PalworldGame.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: PalworldRestoreSpec defines a request to restore a backup
+              into a game.
+            properties:
+              backupRef:
+                description: |-
+                  BackupRef is the PalworldBackup to restore from (same namespace). Exactly
+                  one of BackupRef or Source must be set.
+                type: string
+              force:
+                default: true
+                description: |-
+                  Force allows restoring into a game that is currently running by stopping
+                  it first. Without Force the restore fails if the game is not already
+                  stopped.
+                type: boolean
+              gameRef:
+                description: GameRef is the target PalworldGame to restore into (same
+                  namespace).
+                type: string
+              source:
+                description: |-
+                  Source restores directly from an external location instead of a
+                  PalworldBackup object.
+                properties:
+                  pvcName:
+                    description: PVCName is the target backup PVC (required when Type
+                      is PVC).
+                    type: string
+                  s3:
+                    description: S3 destination configuration (required when Type
+                      is S3).
+                    properties:
+                      accessKeyIDKey:
+                        default: AWS_ACCESS_KEY_ID
+                        description: AccessKeyIDKey is the Secret key for the access
+                          key id.
+                        type: string
+                      bucket:
+                        description: Bucket is the target bucket.
+                        type: string
+                      credentialsSecret:
+                        description: |-
+                          CredentialsSecret references a Secret with AWS_ACCESS_KEY_ID and
+                          AWS_SECRET_ACCESS_KEY keys (or the keys named below).
+                        type: string
+                      endpoint:
+                        description: Endpoint is the S3 endpoint URL. For AWS this
+                          may be omitted.
+                        type: string
+                      insecureTLS:
+                        default: false
+                        description: InsecureTLS disables TLS verification for the
+                          endpoint (test only).
+                        type: boolean
+                      prefix:
+                        description: Prefix is an optional key prefix within the bucket.
+                        type: string
+                      region:
+                        description: Region is the S3 region.
+                        type: string
+                      secretAccessKeyKey:
+                        default: AWS_SECRET_ACCESS_KEY
+                        description: SecretAccessKeyKey is the Secret key for the
+                          secret access key.
+                        type: string
+                    required:
+                    - bucket
+                    - credentialsSecret
+                    type: object
+                  type:
+                    default: VolumeSnapshot
+                    description: Type of destination.
+                    enum:
+                    - VolumeSnapshot
+                    - S3
+                    - PVC
+                    type: string
+                type: object
+            required:
+            - gameRef
+            type: object
+          status:
+            description: PalworldRestoreStatus captures the observed state of a restore.
+            properties:
+              completionTime:
+                description: CompletionTime is when the restore finished.
+                format: date-time
+                type: string
+              conditions:
+                description: Conditions represent the latest observations of the restore's
+                  state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              jobName:
+                description: JobName is the Job performing the restore copy, when
+                  applicable.
+                type: string
+              message:
+                description: Message is a human-readable status message.
+                type: string
+              originalReplicas:
+                description: |-
+                  OriginalReplicas records the game's desired replica count before the
+                  restore stopped it, so it can be returned to that state afterwards.
+                format: int32
+                type: integer
+              phase:
+                description: Phase is the current restore phase.
+                enum:
+                - Pending
+                - Stopping
+                - Restoring
+                - Starting
+                - Completed
+                - Failed
+                type: string
+              startTime:
+                description: StartTime is when the restore began.
+                format: date-time
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

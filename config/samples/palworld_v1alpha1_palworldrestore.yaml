@@ -1,0 +1,10 @@
+apiVersion: palworld.twodcube.io/v1alpha1
+kind: PalworldRestore
+metadata:
+  name: palworldgame-sample-restore
+spec:
+  gameRef: palworldgame-sample
+  # Restore from a previously completed PalworldBackup. The operator stops the
+  # server, restores the world, then starts it back up.
+  backupRef: palworldgame-sample-manual-backup
+  force: true

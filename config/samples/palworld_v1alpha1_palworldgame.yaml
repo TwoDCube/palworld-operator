@@ -1,0 +1,66 @@
+apiVersion: palworld.twodcube.io/v1alpha1
+kind: PalworldGame
+metadata:
+  name: palworldgame-sample
+  labels:
+    app.kubernetes.io/name: palworld-operator
+spec:
+  # "latest" tracks the newest public Steam build; rollout is governed by
+  # spec.update below.
+  version: latest
+  replicas: 1
+
+  serverSettings:
+    serverName: "My Palworld Server"
+    serverDescription: "Hosted on OpenShift by the Palworld Operator"
+    serverPlayerMaxNum: 32
+    difficulty: None
+    deathPenalty: All
+    expRate: 1.5
+    palCaptureRate: 1.2
+    bEnableInvaderEnemy: true
+    crossplayPlatforms:
+    - Steam
+    - Xbox
+    - PS5
+    - Mac
+
+  storage:
+    size: 30Gi
+    # storageClassName: ocs-storagecluster-ceph-rbd
+
+  networking:
+    gamePort: 8211
+    queryPort: 27015
+    # On on-prem OpenShift, install MetalLB and use LoadBalancer for the UDP
+    # game port. On a cloud provider, LoadBalancer works out of the box.
+    serviceType: ClusterIP
+    restAPI:
+      route: false
+
+  resources:
+    requests:
+      cpu: "4"
+      memory: 16Gi
+    limits:
+      memory: 24Gi
+
+  update:
+    strategy: Manual
+    pollIntervalMinutes: 30
+    backupBeforeUpdate: true
+
+  backup:
+    enabled: true
+    schedule: "0 */6 * * *"
+    retention: 8
+    onDelete: true
+    destination:
+      type: VolumeSnapshot
+
+  monitoring:
+    metricsExporter: true
+    serviceMonitor: false
+
+  podDisruptionBudget:
+    enabled: true

@@ -1,0 +1,49 @@
+# OPTIONAL SecurityContextConstraints for Palworld game pods.
+#
+# The bundled server image is built to run under OpenShift's default
+# restricted-v2 SCC (arbitrary non-root UID, GID 0, group-writable data), so in
+# most clusters you do NOT need this file. Apply it only if your cluster's
+# restricted-v2 has been hardened in a way that blocks the server, or if you
+# want a dedicated, auditable SCC for game workloads.
+#
+# To use it, apply this SCC and grant it to the game namespace's default (and
+# operator-created) service accounts, e.g.:
+#   oc adm policy add-scc-to-user palworld-server -z <game-serviceaccount> -n <namespace>
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: palworld-server
+  labels:
+    app.kubernetes.io/name: palworld-operator
+allowHostDirVolumePlugin: false
+allowHostIPC: false
+allowHostNetwork: false
+allowHostPID: false
+allowHostPorts: false
+allowPrivilegeEscalation: false
+allowPrivilegedContainer: false
+allowedCapabilities: []
+defaultAddCapabilities: []
+fsGroup:
+  type: MustRunAs
+groups: []
+priority: null
+readOnlyRootFilesystem: false
+requiredDropCapabilities:
+- ALL
+runAsUser:
+  type: MustRunAsRange
+seLinuxContext:
+  type: MustRunAs
+seccompProfiles:
+- runtime/default
+supplementalGroups:
+  type: RunAsAny
+users: []
+volumes:
+- configMap
+- downwardAPI
+- emptyDir
+- persistentVolumeClaim
+- projected
+- secret

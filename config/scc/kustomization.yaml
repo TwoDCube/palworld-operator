@@ -1,0 +1,4 @@
+# Optional: apply with `oc apply -k config/scc`. See scc.yaml for when this is
+# needed (most clusters do not need it).
+resources:
+- scc.yaml
