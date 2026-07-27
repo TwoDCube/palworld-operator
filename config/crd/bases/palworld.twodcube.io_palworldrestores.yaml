@@ -83,6 +83,16 @@ spec:
                     description: PVCName is the target backup PVC (required when Type
                       is PVC).
                     type: string
+                  pvcPath:
+                    description: |-
+                      PVCPath is the path of a backup archive inside PVCName, relative to the
+                      mount root (e.g. "seeds/world.tar.gz").
+
+                      It applies only to PalworldRestore.spec.source, where it carries the full
+                      object key of an archive this operator did not write. As a backup
+                      destination the key is always derived as "<game>/<backup>.tar.gz", so this
+                      field is ignored.
+                    type: string
                   s3:
                     description: S3 destination configuration (required when Type
                       is S3).

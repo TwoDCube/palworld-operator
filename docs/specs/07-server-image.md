@@ -152,3 +152,14 @@ configured from `S3_*` + `AWS_*` env. `restore.sh` extracts into
 `${DATA_DIR}.restore-staging` **first** and only swaps it into `${DATA_DIR}` once
 extraction fully succeeds, so a corrupt archive never destroys the existing
 world. Both run inside operator-scheduled Jobs (specs 04/05).
+
+Both scripts share `configure_rclone`, which sets
+`RCLONE_CONFIG_S3_NO_CHECK_BUCKET=true`. The bucket is always a **precondition**
+here — the operator is given one in `destination.s3.bucket` and has no business
+provisioning it — but by default rclone probes the bucket on upload and tries to
+`CreateBucket` when the probe fails. That call is not harmless: an S3 identity
+provisioned per-bucket (an ODF `ObjectBucketClaim` user carries a 1-bucket quota)
+answers it with `TooManyBuckets`, which fails the whole upload even though the
+bucket exists and is writable. Suppressing the probe also drops `CreateBucket`
+from the permissions the credentials need. Reads never probed, so this only ever
+affected `backup.sh`.

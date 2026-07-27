@@ -115,6 +115,7 @@ Applies to **every** pod termination, because it is enforced by the container's
 | `type` | enum `VolumeSnapshot\|S3\|PVC` | `VolumeSnapshot` |
 | `s3` | `*S3Destination` | — (required for `S3`) |
 | `pvcName` | string | — (required for `PVC`) |
+| `pvcPath` | string | — (**restore `source` only**, required there for `PVC`) |
 | `s3.bucket` | string | — (required) |
 | `s3.prefix` | string | `""` |
 | `s3.endpoint` | string | `""` |
@@ -123,6 +124,11 @@ Applies to **every** pod termination, because it is enforced by the container's
 | `s3.accessKeyIDKey` | string | `"AWS_ACCESS_KEY_ID"` |
 | `s3.secretAccessKeyKey` | string | `"AWS_SECRET_ACCESS_KEY"` |
 | `s3.insecureTLS` | bool | `false` |
+
+`pvcPath` is the archive's path inside `pvcName`, relative to the mount root. It
+is meaningful **only** on `PalworldRestore.spec.source`: as a backup *destination*
+the key is always derived (`<game>/<backup>.tar.gz`), so the field is ignored
+there and the `PalworldGame` webhook does not require it (spec 05).
 
 ### `status`
 

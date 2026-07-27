@@ -16,7 +16,7 @@ Server container: `game` 8211/UDP, `query` 27015/UDP, `rcon` 25575/TCP, `rest`
 | ------- | ---- | ---- | ----- | ------- |
 | Headless | `<name>-headless` | ClusterIP `None` | game, query, rcon, rest | StatefulSet governing service; `publishNotReadyAddresses: true`. |
 | Game | `<name>-game` | `networking.serviceType` (default ClusterIP) | game, query (UDP) | **Public** player traffic. |
-| Admin | `<name>-admin` | ClusterIP | rcon, rest (TCP) | **Internal only** — the operator's RCON/REST channel; `publishNotReadyAddresses: true`. |
+| Admin | `<name>-admin` | ClusterIP | rcon, rest (TCP) | **Internal only** — the operator's admin channel; `publishNotReadyAddresses: true`. |
 | Metrics | `<name>-metrics` | ClusterIP | metrics (TCP) | Scrape target; only when `monitoring.metricsExporter` and `OPERATOR_IMAGE` set. Carries `app.kubernetes.io/component=metrics`. |
 
 The game Service uses `externalTrafficPolicy: Local` for `NodePort`/
@@ -54,6 +54,13 @@ Derived from the game Service: `LoadBalancer` → `<ingress ip|hostname>:<gamePo
 Rules 2 and 3 are deliberately separate. A single rule covering both ports would
 force the router peer onto RCON as well; splitting them keeps the router grant
 scoped to the one port the Route actually targets.
+
+The operator itself speaks **only REST** — every live interaction (player counts,
+`info`, `save`, `announce`, `shutdown`) goes over 8212, from the controllers
+(spec 02/03/04) and from `graceful-shutdown.sh` (spec 07). Rule 2 exists because
+the port is enabled in the rendered INI (spec 06) and administrators use it
+directly; `internal/palworld.RCONClient` implements that channel but is not wired
+into any controller path.
 
 Without rule 3's router peer a Route created by `restAPI.route: true` is
 answered with **HTTP 503** — the router runs in `openshift-ingress` and matches

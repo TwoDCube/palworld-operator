@@ -284,6 +284,16 @@ type BackupDestination struct {
 	// PVCName is the target backup PVC (required when Type is PVC).
 	// +optional
 	PVCName string `json:"pvcName,omitempty"`
+
+	// PVCPath is the path of a backup archive inside PVCName, relative to the
+	// mount root (e.g. "seeds/world.tar.gz").
+	//
+	// It applies only to PalworldRestore.spec.source, where it carries the full
+	// object key of an archive this operator did not write. As a backup
+	// destination the key is always derived as "<game>/<backup>.tar.gz", so this
+	// field is ignored.
+	// +optional
+	PVCPath string `json:"pvcPath,omitempty"`
 }
 
 // BackupPolicy configures automatic scheduled backups for a PalworldGame.

@@ -123,19 +123,62 @@ func (r *PalworldRestoreReconciler) resolvePlan(ctx context.Context, restore *pa
 		}, nil
 	}
 	if restore.Spec.Source != nil {
-		src := *restore.Spec.Source
-		if src.Type == palworldv1alpha1.BackupDestinationVolumeSnapshot {
-			return restorePlan{}, fmt.Errorf("direct VolumeSnapshot source requires backupRef")
-		}
-		// For a direct Source the S3 Prefix (or PVC subpath) is the full object key.
-		key := ""
-		if src.S3 != nil {
-			key = src.S3.Prefix
-			src.S3.Prefix = ""
-		}
-		return restorePlan{tarball: true, dest: src, key: key}, nil
+		return directSourcePlan(*restore.Spec.Source)
 	}
 	return restorePlan{}, fmt.Errorf("one of backupRef or source must be set")
+}
+
+// directSourcePlan builds the tarball plan for a spec.source that does not go
+// through a PalworldBackup.
+//
+// Nothing about such an archive can be derived, so the key comes from the spec:
+// the S3 Prefix or the PVC Path carries the *full* object key. Both are
+// validated here rather than left to the Job, because resolvePlan runs before
+// the phase switch in Reconcile — a rejection here fails the restore while the
+// game is still up, whereas an empty key reaches restore.sh as the directory
+// "/backup/" and fails only after the server has already been stopped.
+func directSourcePlan(src palworldv1alpha1.BackupDestination) (restorePlan, error) {
+	switch src.Type {
+	case palworldv1alpha1.BackupDestinationVolumeSnapshot:
+		return restorePlan{}, fmt.Errorf("direct VolumeSnapshot source requires backupRef")
+
+	case palworldv1alpha1.BackupDestinationS3:
+		if src.S3 == nil {
+			return restorePlan{}, fmt.Errorf("source.s3 is required for the S3 source type")
+		}
+		if src.S3.Bucket == "" {
+			return restorePlan{}, fmt.Errorf("source.s3.bucket is required for the S3 source type")
+		}
+		if src.S3.CredentialsSecret == "" {
+			return restorePlan{}, fmt.Errorf("source.s3.credentialsSecret is required for the S3 source type")
+		}
+		if src.S3.Prefix == "" {
+			return restorePlan{}, fmt.Errorf("source.s3.prefix is required for a direct S3 source: " +
+				"it carries the full object key of the archive (e.g. \"seeds/world.tar.gz\")")
+		}
+		key := src.S3.Prefix
+		// s3Env emits Prefix and key separately and restore.sh joins them, so the
+		// prefix must be cleared or it would be repeated in the remote path.
+		// Copy first: src.S3 aliases the caller's spec, which must not be mutated.
+		s3 := *src.S3
+		s3.Prefix = ""
+		src.S3 = &s3
+		return restorePlan{tarball: true, dest: src, key: key}, nil
+
+	case palworldv1alpha1.BackupDestinationPVC:
+		if src.PVCName == "" {
+			return restorePlan{}, fmt.Errorf("source.pvcName is required for the PVC source type")
+		}
+		if src.PVCPath == "" {
+			return restorePlan{}, fmt.Errorf("source.pvcPath is required for a direct PVC source: "+
+				"it is the archive's path inside %q, relative to the mount root "+
+				"(e.g. \"seeds/world.tar.gz\")", src.PVCName)
+		}
+		return restorePlan{tarball: true, dest: src, key: src.PVCPath}, nil
+
+	default:
+		return restorePlan{}, fmt.Errorf("unsupported source type %q", src.Type)
+	}
 }
 
 func (r *PalworldRestoreReconciler) stopGame(ctx context.Context, restore *palworldv1alpha1.PalworldRestore, game *palworldv1alpha1.PalworldGame) (ctrl.Result, error) {

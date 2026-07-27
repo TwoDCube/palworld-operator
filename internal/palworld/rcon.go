@@ -25,9 +25,12 @@ import (
 	"github.com/gorcon/rcon"
 )
 
-// RCONClient wraps a Source RCON connection to a Palworld server. It is used as
-// a fallback control channel when the REST API is disabled, and for commands
-// that are only exposed over RCON.
+// RCONClient wraps a Source RCON connection to a Palworld server.
+//
+// It is the fallback control channel for a server with the REST API disabled,
+// and for commands only exposed over RCON. No controller currently dials it --
+// the operator drives every live interaction over REST (spec 08) -- so this is a
+// standalone client, not part of any reconcile path.
 type RCONClient struct {
 	address  string
 	password string
