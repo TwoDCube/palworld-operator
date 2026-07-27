@@ -31,6 +31,12 @@ configure_rclone() {
     export RCLONE_CONFIG_S3_PROVIDER="${S3_PROVIDER:-Other}"
     export RCLONE_CONFIG_S3_ENV_AUTH=true
     export RCLONE_CONFIG_S3_REGION="${S3_REGION:-}"
+    # The bucket is a precondition, never ours to create. Without this rclone
+    # probes it before uploading and falls back to CreateBucket, which a
+    # per-bucket S3 identity (e.g. an ODF ObjectBucketClaim user, quota 1)
+    # rejects with TooManyBuckets -- failing the upload into a bucket that
+    # exists and is writable. Also keeps CreateBucket out of the required perms.
+    export RCLONE_CONFIG_S3_NO_CHECK_BUCKET=true
     if [ -n "${S3_ENDPOINT:-}" ]; then
         export RCLONE_CONFIG_S3_ENDPOINT="${S3_ENDPOINT}"
     fi

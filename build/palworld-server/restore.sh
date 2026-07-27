@@ -27,6 +27,10 @@ configure_rclone() {
     export RCLONE_CONFIG_S3_PROVIDER="${S3_PROVIDER:-Other}"
     export RCLONE_CONFIG_S3_ENV_AUTH=true
     export RCLONE_CONFIG_S3_REGION="${S3_REGION:-}"
+    # Kept identical to backup.sh: reads do not probe the bucket today, but the
+    # operator never creates one either, so CreateBucket stays out of the
+    # required credentials permissions. See backup.sh for the failure mode.
+    export RCLONE_CONFIG_S3_NO_CHECK_BUCKET=true
     if [ -n "${S3_ENDPOINT:-}" ]; then
         export RCLONE_CONFIG_S3_ENDPOINT="${S3_ENDPOINT}"
     fi

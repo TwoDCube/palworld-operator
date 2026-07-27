@@ -13,10 +13,38 @@ The controller probes `openShift` (Route API) once. Terminal phases
   `Completed` → error. If it has `status.volumeSnapshotName` → **snapshot plan**
   (`snapshot = volumeSnapshotName`). Otherwise → **tarball plan**
   (`dest = backup.spec.destination`, `key = <gameRef>/<backup>.tar.gz`).
-- `source` set (no `backupRef`): `VolumeSnapshot` type → error (requires
-  `backupRef`). Otherwise **tarball plan**; for S3 the object key is taken from
-  `source.s3.prefix` (and prefix is then cleared).
+- `source` set (no `backupRef`): a **direct source**, validated then turned into a
+  **tarball plan** (see below).
 - Neither set → error.
+
+`resolvePlan` runs in `Reconcile` *before* the phase switch, so every error it
+returns becomes a terminal `failRestore(InvalidSource, <message>)` on the first
+reconcile — before `stopGame` touches the running server. Source misconfiguration
+therefore never costs the operator an outage.
+
+### Direct sources
+
+A direct `source` names an archive that this operator did not write, so nothing
+can be derived from a `PalworldBackup`: the object key has to come from the spec.
+Unlike the `backupRef` path — where the key is always
+`<gameRef>/<backup>.tar.gz` — the field that carries it holds the **full key**,
+not a prefix or a parent directory.
+
+| `source.type` | Key field | Plan |
+| ------------- | --------- | ---- |
+| `VolumeSnapshot` | — | error: requires `backupRef` |
+| `S3` | `source.s3.prefix` | `key = prefix`, then `prefix` is cleared so `s3Env` emits `S3_PREFIX=""` + `S3_KEY=<key>` |
+| `PVC` | `source.pvcPath` | `key = pvcPath`; the Job runs `restore.sh pvc /backup/<key>` |
+
+Each is validated up front, because every one of these fields ends up in a shell
+command inside the restore Job and an empty value there names a *directory*
+rather than an archive — `restore.sh` would fail deep inside the Job with
+`source /backup/ not found` long after the game had been stopped:
+
+- `S3`: `s3` must be set, with non-empty `bucket`, `credentialsSecret` and
+  `prefix`.
+- `PVC`: non-empty `pvcName` and `pvcPath`.
+- Any other type → error naming the unsupported type.
 
 ## State machine
 
@@ -76,4 +104,6 @@ GC'd. `SetupWithManager` `Owns` Jobs and reads `DEFAULT_SERVER_IMAGE`.
 (`restartPolicy: Never`, `backoffLimit: 3`, `ttl: 3600`, `activeDeadline: 10800`).
 Mounts `data-<game>-0` at `/palworld` (and the backup PVC at `/backup` for the
 `PVC` source). Runs `/usr/local/bin/restore.sh s3` (env from the source + `AWS_*`)
-or `/usr/local/bin/restore.sh pvc /backup/<key>`.
+or `/usr/local/bin/restore.sh pvc /backup/<key>`, where `<key>` is
+`<gameRef>/<backup>.tar.gz` for a `backupRef` restore and `source.pvcPath` for a
+direct `PVC` source.

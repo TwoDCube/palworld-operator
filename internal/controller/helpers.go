@@ -95,16 +95,6 @@ func restClientFor(ctx context.Context, c client.Client, uncached client.Reader,
 	return palworld.NewRESTClient(adminHost(g), resources.RESTPort, pw), nil
 }
 
-// rconClientFor builds an RCON client targeting the game's admin service.
-// uncached is the manager's APIReader; see adminPassword.
-func rconClientFor(ctx context.Context, c client.Client, uncached client.Reader, g *palworldv1alpha1.PalworldGame) (*palworld.RCONClient, error) {
-	pw, err := adminPassword(ctx, c, uncached, g)
-	if err != nil {
-		return nil, err
-	}
-	return palworld.NewRCONClient(adminHost(g), resources.RCONPort, pw), nil
-}
-
 // reconcileService creates or updates a Service, preserving server-assigned
 // fields (ClusterIP and auto-allocated NodePorts) across updates.
 func reconcileService(ctx context.Context, c client.Client, owner *palworldv1alpha1.PalworldGame, scheme *runtime.Scheme, desired *corev1.Service) error {
