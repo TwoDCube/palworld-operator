@@ -49,9 +49,33 @@ LoadBalancer/`Local` reproduction:
 | terminating, **without** the flag | `ready=false serving=true terminating=true` | `localEndpoints: 0` → **503** |
 | terminating, **with** the flag | `ready=true serving=true terminating=true` | `localEndpoints: 1` → 200 |
 
-`serving=true` in every row: the readiness probe never fails during a shutdown,
-because `graceful-shutdown.sh` keeps the REST API answering until the very end.
-The termination condition alone causes the eviction, so no probe tuning fixes it.
+Two separate things drive `ready=false` on a real shutdown, and the flag
+overrides both:
+
+1. the **terminating** condition, applied the instant the pod is deleted; and
+2. the pod's own `Ready` condition, which the kubelet flips to false roughly a
+   minute into termination — visible as `serving` going false.
+
+The second is why the reported symptom was "connection lost after about a
+minute" rather than immediately. Neither is a probe failure that tuning could
+avoid: `graceful-shutdown.sh` keeps the REST API answering until the very end,
+and the endpoint is withdrawn regardless.
+
+Verified end-to-end on a live game with a player connected, deleting the pod and
+sampling every 15s (`warnSeconds: 300`, `warnIntervalSeconds: 60`):
+
+```
+T+0    ready=true  serving=true  term=false  health=200  vip=held   (baseline)
+T+18   ready=true  serving=true  term=true   health=200  vip=held   announce
+T+71   ready=true  serving=false term=true   health=200  vip=held   announce
+T+302  ready=true  serving=false term=true   health=200  vip=held   announce (6th)
+T+357  ready=true  serving=true  term=false  health=200  vip=held   replacement ready
+```
+
+`ready` and the health check hold for the entire countdown even after `serving`
+drops, the VIP is never withdrawn, and all six 60s-spaced broadcasts are
+delivered. Actual player-visible downtime is the ~50s between the server
+stopping and the replacement becoming ready.
 
 The cost is that the endpoint is also published while a pod is *starting* —
 including the ~20-minute first SteamCMD install — so clients reach an advertised
