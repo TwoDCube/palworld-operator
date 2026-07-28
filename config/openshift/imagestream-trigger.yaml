@@ -1,0 +1,22 @@
+# Roll the manager automatically when its ImageStream tag is updated.
+#
+# OpenShift's image trigger controller watches this annotation, resolves the
+# named ImageStreamTag to a digest, and writes that digest into the container's
+# image field. Two consequences, both wanted when the operator is built
+# in-cluster:
+#
+#   * every completed build rolls the Deployment, with no `oc rollout restart`;
+#   * the running image is always a digest, so a rebuilt mutable tag can never
+#     leave the Deployment silently on a stale cached layer.
+#
+# Deliberately not applied to the game StatefulSet: the operator reconciles that
+# object's image from DEFAULT_SERVER_IMAGE, so a trigger rewriting it would fight
+# the operator's own writes, and it would restart players' sessions on every
+# server-image build. Game rollouts stay deliberate.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: palworld-operator-controller-manager
+  annotations:
+    image.openshift.io/triggers: |-
+      [{"from":{"kind":"ImageStreamTag","name":"palworld-operator:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"manager\")].image"}]

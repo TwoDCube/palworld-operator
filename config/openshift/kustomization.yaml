@@ -12,3 +12,15 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
 - ../default
+
+# [IMAGESTREAM TRIGGER] When the operator image is built in-cluster (`oc
+# new-build --binary --name=palworld-operator`) rather than pulled from a
+# registry, uncomment the next two lines. Each completed build then rolls the
+# manager automatically, onto a digest rather than a mutable tag. Left off by
+# default because it is inert unless an ImageStream named `palworld-operator`
+# exists in the operator's namespace. See spec 10.
+#patches:
+#- path: imagestream-trigger.yaml
+#  target:
+#    kind: Deployment
+#    name: palworld-operator-controller-manager
