@@ -411,6 +411,16 @@ type MonitoringSpec struct {
 	// +kubebuilder:default=true
 	// +optional
 	MetricsExporter bool `json:"metricsExporter,omitempty"`
+
+	// ExporterResources overrides the metrics-exporter sidecar's resources.
+	//
+	// The default is QoS-neutral (requests == limits for both cpu and memory) so
+	// the operator's own sidecar can never stop a pod reaching Guaranteed QoS,
+	// which is what the kubelet's static CPU Manager policy requires before it
+	// will hand the game container exclusive cores. Setting unmatched
+	// requests/limits here downgrades the whole pod to Burstable.
+	// +optional
+	ExporterResources *corev1.ResourceRequirements `json:"exporterResources,omitempty"`
 }
 
 // NodeDrainPolicy configures how the operator reacts when the node hosting the
