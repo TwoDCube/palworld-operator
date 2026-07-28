@@ -89,7 +89,7 @@ replacement in `config/default`), `DEFAULT_SERVER_IMAGE`
 | Path | Purpose |
 | ---- | ------- |
 | `config/default` | Base install: `crd` + `rbac` + `manager` + metrics service. `namespace: palworld-operator-system`, `namePrefix: palworld-operator-`. Replacement syncs `OPERATOR_IMAGE` to the manager image. |
-| `config/openshift` | Thin overlay over `default` (`make deploy-openshift`). OpenShift specifics are auto-detected at runtime. |
+| `config/openshift` | Thin overlay over `default` (`make deploy-openshift`). OpenShift specifics are auto-detected at runtime. Carries the opt-in ImageStream trigger below. |
 | `config/webhook` | ValidatingWebhookConfiguration + `webhook-service`. |
 | `config/certmanager` | Self-signed issuer + serving cert for the webhook (requires cert-manager). |
 | `config/scc` | Optional hardened `palworld-server` SCC (not wired in). |
@@ -99,6 +99,32 @@ replacement in `config/default`), `DEFAULT_SERVER_IMAGE`
 Images are placeholders: `quay.io/twodcube/palworld-operator` (operator) and
 `quay.io/twodcube/palworld-server` (game). The webhook is opt-in and requires the
 `webhook` + `certmanager` overlays plus `--enable-webhooks`.
+
+### ImageStream trigger (opt-in, `config/openshift`)
+
+`config/openshift/imagestream-trigger.yaml` adds
+`image.openshift.io/triggers` to the manager Deployment. OpenShift's image
+trigger controller resolves the named `ImageStreamTag` to a **digest** and writes
+it into the container's image field, so each completed in-cluster build rolls the
+manager on its own and the running image can never be a stale mutable tag.
+
+It is commented out in the overlay's `kustomization.yaml` because it is inert
+unless an ImageStream named `palworld-operator` exists in the operator's
+namespace — the case when the image is built with
+`oc new-build --binary --name=palworld-operator` rather than pulled from a
+registry. Uncomment the `patches:` block to enable it.
+
+Without it, a Deployment tracking a mutable tag with the base's
+`imagePullPolicy: IfNotPresent` will come back on the *previously cached* layer
+after a rebuild + `rollout restart`, which looks exactly like the new code not
+working.
+
+The trigger is deliberately **not** applied to the game StatefulSet. That object
+is reconciled by the operator from `DEFAULT_SERVER_IMAGE`, so a trigger rewriting
+its image would fight the operator's own writes, and it would restart players'
+sessions on every server-image build. To pick up a rebuilt server image, set
+`spec.image.pullPolicy: Always` on the `PalworldGame` and let the next restart
+take it.
 
 ## Makefile
 
