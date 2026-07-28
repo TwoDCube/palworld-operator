@@ -127,15 +127,36 @@ player_count() {
     printf '%s' "${count}"
 }
 
+# Fixed announce points added on top of the coarse interval, largest first.
+# A minute-granularity countdown goes silent for the last 59 seconds, which is
+# exactly when a player needs to reach a safe spot and log out.
+SHUTDOWN_FINAL_WARN_POINTS="30 10 9 8 7 6 5 4 3 2 1"
+
+# Largest announce point strictly below "remaining", or 0 when the countdown is
+# over. Considers the coarse interval step and the fixed tail, so the schedule
+# tightens as the deadline approaches instead of stepping past it.
+next_warn_point() {
+    local remaining="$1" interval="$2" best=0 candidate
+    candidate=$(( remaining - interval ))
+    [ "${candidate}" -gt "${best}" ] && best="${candidate}"
+    for candidate in ${SHUTDOWN_FINAL_WARN_POINTS}; do
+        if [ "${candidate}" -lt "${remaining}" ] && [ "${candidate}" -gt "${best}" ]; then
+            best="${candidate}"
+        fi
+    done
+    printf '%d' "${best}"
+}
+
 warn_players() {
-    local remaining="$1" interval="$2" step
+    local remaining="$1" interval="$2" next
     while [ "${remaining}" -gt 0 ]; do
         log "warning players: ${remaining}s remaining"
         announce "$(render_message "${SHUTDOWN_WARN_MESSAGE}" "${remaining}")"
-        step="${interval}"
-        [ "${step}" -gt "${remaining}" ] && step="${remaining}"
-        sleep "${step}"
-        remaining=$(( remaining - step ))
+        next="$(next_warn_point "${remaining}" "${interval}")"
+        # Sleeping the difference (rather than a fixed step) keeps the wall clock
+        # honest: the countdown still ends after exactly warn_seconds.
+        sleep "$(( remaining - next ))"
+        remaining="${next}"
     done
 }
 
