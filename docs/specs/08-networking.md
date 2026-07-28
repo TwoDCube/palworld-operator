@@ -15,7 +15,7 @@ Server container: `game` 8211/UDP, `query` 27015/UDP, `rcon` 25575/TCP, `rest`
 | Service | Name | Type | Ports | Purpose |
 | ------- | ---- | ---- | ----- | ------- |
 | Headless | `<name>-headless` | ClusterIP `None` | game, query, rcon, rest | StatefulSet governing service; `publishNotReadyAddresses: true`. |
-| Game | `<name>-game` | `networking.serviceType` (default ClusterIP) | game, query (UDP) | **Public** player traffic. |
+| Game | `<name>-game` | `networking.serviceType` (default ClusterIP) | game, query (UDP) | **Public** player traffic; `publishNotReadyAddresses: true` (see below). |
 | Admin | `<name>-admin` | ClusterIP | rcon, rest (TCP) | **Internal only** — the operator's admin channel; `publishNotReadyAddresses: true`. |
 | Metrics | `<name>-metrics` | ClusterIP | metrics (TCP) | Scrape target; only when `monitoring.metricsExporter` and `OPERATOR_IMAGE` set. Carries `app.kubernetes.io/component=metrics`. |
 
@@ -23,6 +23,43 @@ The game Service uses `externalTrafficPolicy: Local` for `NodePort`/
 `LoadBalancer` (client-IP preservation), pins `nodePort` when set, and applies
 `loadBalancerIP` / `loadBalancerClass` / `serviceAnnotations`. The admin Service
 is **never** exposed externally.
+
+### Why the game Service publishes not-ready addresses
+
+All three pod-backed Services set `publishNotReadyAddresses: true`, and on the
+game Service it is what keeps players connected through the shutdown countdown
+(spec 07).
+
+The EndpointSlice controller marks an endpoint `ready=false` as soon as its pod
+is **terminating**, regardless of probe results. That interacts badly with
+`externalTrafficPolicy: Local`: kube-proxy's `healthCheckNodePort` counts only
+*ready* local endpoints, so it starts answering 503 and the load balancer
+withdraws the node. A game is a **single-replica** StatefulSet with
+`OrderedReady`, so no replacement endpoint exists to hold the health check up —
+the VIP disappears entirely.
+
+The pod is terminating for the *whole* preStop countdown, so without this the
+players being warned "shutting down in 5 minutes" lose their connection about a
+minute in, having received only the first broadcast. Measured on a 1-replica
+LoadBalancer/`Local` reproduction:
+
+| pod state | endpoint conditions | `healthCheckNodePort` |
+| --------- | ------------------- | --------------------- |
+| running | `ready=true serving=true terminating=false` | `localEndpoints: 1` → 200 |
+| terminating, **without** the flag | `ready=false serving=true terminating=true` | `localEndpoints: 0` → **503** |
+| terminating, **with** the flag | `ready=true serving=true terminating=true` | `localEndpoints: 1` → 200 |
+
+`serving=true` in every row: the readiness probe never fails during a shutdown,
+because `graceful-shutdown.sh` keeps the REST API answering until the very end.
+The termination condition alone causes the eviction, so no probe tuning fixes it.
+
+The cost is that the endpoint is also published while a pod is *starting* —
+including the ~20-minute first SteamCMD install — so clients reach an advertised
+address where nothing answers yet, rather than an absent one. For UDP that is
+close to equivalent from the client's side, and it is the price of not cutting
+off live players mid-countdown. `externalTrafficPolicy: Cluster` would avoid the
+health-check gate too, but it sacrifices the client source IP this Service
+deliberately preserves.
 
 UDP cannot traverse an OpenShift Route or Kubernetes Ingress, so the game port
 must be a `LoadBalancer` (e.g. MetalLB on-prem) or `NodePort`.
