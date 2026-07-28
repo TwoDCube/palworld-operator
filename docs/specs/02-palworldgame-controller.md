@@ -79,7 +79,39 @@ StatefulSet volume claim template — not GC'd automatically; see deletion).
 - `volumeClaimTemplates`: one PVC named `data`, size (default `20Gi`),
   `accessModes` (default `[ReadWriteOnce]`), `storageClassName`.
 - Compute defaults: if `resources.requests` omit cpu/memory, they default to
-  `2` / `8Gi`.
+  `2` / `8Gi`. Only *requests* are defaulted — the operator never invents a
+  limit, so the out-of-the-box pod is `Burstable`.
+
+### Pod QoS and CPU pinning
+
+A pod is `Guaranteed` only when **every** container sets `requests == limits` for
+both cpu and memory, and only a `Guaranteed` pod's integer-cpu containers get
+exclusive cores from the kubelet's `static` CPU Manager policy. QoS is therefore
+a *pod-wide* property that any single container can veto.
+
+The metrics-exporter sidecar is injected by the operator, not by the user, so its
+resources are **QoS-neutral**: `requests == limits` for cpu and memory
+(`exporterResources`, default `100m` / `64Mi`). Previously it requested `10m`/`32Mi`
+with a memory-only limit, which downgraded every pod to `Burstable` and made CPU
+pinning impossible to express through this API — the game container's own
+settings could not recover it.
+
+Neutral means the sidecar never *forces* Guaranteed either: if the game container
+is Burstable-shaped, the pod is still Burstable. The sidecar's cpu stays
+fractional deliberately, so it draws from the shared pool and only the game
+container takes exclusive cores.
+
+To pin cores, set matching `spec.resources` requests/limits with an integer cpu
+on a node running `cpuManagerPolicy: static`:
+
+```yaml
+resources:
+  requests: {cpu: "4", memory: 16Gi}
+  limits:   {cpu: "4", memory: 16Gi}
+```
+
+`spec.sidecars` entries are user-supplied and left untouched; an unmatched one
+downgrades the pod, so the webhook warns about it (spec 01).
 
 `ensureStatefulSet` uses `CreateOrUpdate`. **On create** it sets the whole spec.
 **On update** it mutates only `replicas`, `template`, `updateStrategy`, and

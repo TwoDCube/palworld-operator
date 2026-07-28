@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/robfig/cron/v3"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -149,12 +150,62 @@ func (v *PalworldGameValidator) validate(game *PalworldGame) (admission.Warnings
 		warnings = append(warnings, "spec.networking.serviceType=LoadBalancer requires a UDP-capable load balancer (e.g. MetalLB on-prem)")
 	}
 
+	for _, w := range warnBrokenGuaranteedQoS(game) {
+		warnings = append(warnings, w)
+	}
+
 	if len(errs) == 0 {
 		return warnings, nil
 	}
 	return warnings, apierrors.NewInvalid(
 		schema.GroupKind{Group: GroupVersion.Group, Kind: "PalworldGame"},
 		game.Name, errs)
+}
+
+// guaranteedShaped reports whether a container's resources qualify it for
+// Guaranteed QoS: cpu and memory each set in both requests and limits, and
+// equal. A pod is Guaranteed only when every container is shaped this way.
+func guaranteedShaped(r corev1.ResourceRequirements) bool {
+	for _, name := range []corev1.ResourceName{corev1.ResourceCPU, corev1.ResourceMemory} {
+		req, okReq := r.Requests[name]
+		lim, okLim := r.Limits[name]
+		if !okReq || !okLim || req.Cmp(lim) != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// warnBrokenGuaranteedQoS reports containers that would downgrade an otherwise
+// Guaranteed pod to Burstable.
+//
+// This is a warning rather than an error: Burstable is a perfectly valid way to
+// run the server, and only an operator asking for CPU pinning cares. But the
+// failure is silent and easy to misread -- the pod schedules and runs fine, it
+// simply never receives exclusive cores from the static CPU Manager policy -- so
+// a user who matched requests to limits on the game container deserves to be
+// told which other container undid it.
+func warnBrokenGuaranteedQoS(game *PalworldGame) []string {
+	if !guaranteedShaped(game.Spec.Resources) {
+		return nil // No Guaranteed intent to break.
+	}
+	var offenders []string
+	if r := game.Spec.Monitoring.ExporterResources; r != nil && !guaranteedShaped(*r) {
+		offenders = append(offenders, "spec.monitoring.exporterResources")
+	}
+	for i, c := range game.Spec.Sidecars {
+		if !guaranteedShaped(c.Resources) {
+			offenders = append(offenders, fmt.Sprintf("spec.sidecars[%d] (%q)", i, c.Name))
+		}
+	}
+	if len(offenders) == 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf(
+		"spec.resources sets requests == limits (Guaranteed QoS), but %s "+
+			"leave requests and limits unmatched; the pod will be Burstable and the "+
+			"kubelet's static CPU Manager policy will not assign it exclusive CPUs",
+		strings.Join(offenders, " and "))}
 }
 
 func validateDestination(path *field.Path, dest BackupDestination) field.ErrorList {

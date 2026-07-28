@@ -60,6 +60,7 @@ Printer columns: `Phase` ← `.status.phase`, `Version` ← `.status.serverVersi
 | `nodeDrain.warnMessage` | string | `"Server node maintenance: migrating in %d seconds, please reach a safe spot"` | `%d` → grace seconds. |
 | `monitoring.serviceMonitor` | bool | `false` | |
 | `monitoring.metricsExporter` | bool | `true` | Requires `OPERATOR_IMAGE` set for the sidecar to be added. |
+| `monitoring.exporterResources` | `*ResourceRequirements` | cpu/memory `100m`/`64Mi`, requests **==** limits | Overrides the exporter sidecar's resources. The default is QoS-neutral (spec 02). |
 | `serviceAccountName` | string | `""` | Empty → operator manages `<name>`. |
 | `shutdown` | `*ShutdownPolicy` | nil (= defaults) | Player countdown before the server stops (spec 07). |
 | `shutdown.warnSeconds` | int32 (≥0) | `300` | 0 stops immediately. |

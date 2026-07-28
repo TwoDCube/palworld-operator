@@ -232,6 +232,44 @@ func serverContainer(g *palworldv1alpha1.PalworldGame, p BuildParams) corev1.Con
 	}
 }
 
+// Defaults for the metrics-exporter sidecar. Deliberately equal as requests and
+// limits -- see exporterResources.
+const (
+	defaultExporterCPU    = "100m"
+	defaultExporterMemory = "64Mi"
+)
+
+// exporterResources returns the resources for the metrics-exporter sidecar.
+//
+// The defaults are *QoS-neutral*: requests == limits for both cpu and memory. A
+// pod is Guaranteed only if every one of its containers matches that way, and
+// only a Guaranteed pod's integer-cpu containers get exclusive cores from the
+// kubelet's static CPU Manager policy. Because this sidecar is injected by the
+// operator rather than asked for by the user, it must never be the container
+// that vetoes Guaranteed -- the earlier defaults (10m/32Mi requests, memory-only
+// limit) did exactly that, making CPU pinning impossible to express through this
+// API no matter what spec.resources said.
+//
+// Neutral cuts both ways: this does not force Guaranteed, it only declines to
+// prevent it. A Burstable-shaped game container still yields a Burstable pod.
+// The cpu default stays fractional on purpose, so the exporter draws from the
+// shared pool and only the game container takes exclusive cores.
+func exporterResources(g *palworldv1alpha1.PalworldGame) corev1.ResourceRequirements {
+	if r := g.Spec.Monitoring.ExporterResources; r != nil {
+		return *r.DeepCopy()
+	}
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse(defaultExporterCPU),
+			corev1.ResourceMemory: resource.MustParse(defaultExporterMemory),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse(defaultExporterCPU),
+			corev1.ResourceMemory: resource.MustParse(defaultExporterMemory),
+		},
+	}
+}
+
 func metricsSidecar(g *palworldv1alpha1.PalworldGame, p BuildParams) corev1.Container {
 	secretName := CredentialsSecretName(g)
 	optional := true
@@ -248,15 +286,7 @@ func metricsSidecar(g *palworldv1alpha1.PalworldGame, p BuildParams) corev1.Cont
 		Ports: []corev1.ContainerPort{
 			{Name: "metrics", ContainerPort: MetricsPort, Protocol: corev1.ProtocolTCP},
 		},
-		Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("10m"),
-				corev1.ResourceMemory: resource.MustParse("32Mi"),
-			},
-			Limits: corev1.ResourceList{
-				corev1.ResourceMemory: resource.MustParse("64Mi"),
-			},
-		},
+		Resources:       exporterResources(g),
 		SecurityContext: containerSecurityContext(),
 		ReadinessProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
