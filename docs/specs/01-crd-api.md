@@ -64,7 +64,7 @@ Printer columns: `Phase` ← `.status.phase`, `Version` ← `.status.serverVersi
 | `serviceAccountName` | string | `""` | Empty → operator manages `<name>`. |
 | `shutdown` | `*ShutdownPolicy` | nil (= defaults) | Player countdown before the server stops (spec 07). |
 | `shutdown.warnSeconds` | int32 (≥0) | `300` | 0 stops immediately. |
-| `shutdown.warnIntervalSeconds` | int32 (≥1) | `60` | Re-broadcast cadence. |
+| `shutdown.warnIntervalSeconds` | int32 (≥1) | `60` | Coarse re-broadcast cadence. The countdown always adds a 30s warning and one per second over the final 10s (spec 07). |
 | `shutdown.warnMessage` | string | `"Server is shutting down for maintenance in %s"` | `%s` → human-readable remaining time, `%d` → remaining seconds. |
 | `terminationGracePeriodSeconds` | `*int64` | nil → `shutdown.warnSeconds + 300` (`600`) | Must outlast the countdown, which runs in `preStop`. An explicit value is honoured verbatim; if it leaves under 30s of headroom the webhook warns and the container clamps the countdown (spec 07). |
 | `podAnnotations` | `map[string]string` | — | On the pod template. |

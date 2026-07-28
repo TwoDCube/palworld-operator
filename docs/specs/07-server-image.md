@@ -106,14 +106,29 @@ Order of operations:
    nobody to warn, and a routine roll of an idle server should not stall for
    minutes. A failed/unparseable player query is treated as "players may be
    online" and still warns.
-3. **Countdown.** Every `SHUTDOWN_WARN_INTERVAL_SECONDS` (default 60) it
-   broadcasts `SHUTDOWN_WARN_MESSAGE` with the remaining time, until
-   `SHUTDOWN_WARN_SECONDS` (default 300) is exhausted. In the message `%s` is
-   replaced with a human-readable remaining time (`5 minutes`, `1 minute`,
-   `30 seconds`) and `%d` with the remaining whole seconds. Defaults therefore
-   broadcast at T-5m, T-4m, T-3m, T-2m and T-1m. `warnSeconds: 0` skips the
-   countdown. Announce bodies are built with `jq` so quotes in an operator's
-   message cannot produce invalid JSON.
+3. **Countdown.** Broadcasts `SHUTDOWN_WARN_MESSAGE` with the remaining time at a
+   schedule that tightens as the deadline approaches, starting from
+   `SHUTDOWN_WARN_SECONDS` (default 300). The announce points are the union of:
+
+   - the coarse cadence, every `SHUTDOWN_WARN_INTERVAL_SECONDS` (default 60);
+   - a fixed warning at **30s**; and
+   - **every second from 10s down to 1s**.
+
+   With the defaults that is T-5m, T-4m, T-3m, T-2m, T-1m, T-30s, then
+   T-10s, T-9s … T-1s. The tail exists because a minute-granularity countdown
+   leaves a player with no signal at all through the last 59 seconds — the
+   window in which they most need to reach a safe spot and log out. The final
+   `announce` of the stop sequence (step 5) covers T-0, so the countdown itself
+   never announces zero.
+
+   Points at or below zero are dropped, so a short `warnSeconds` simply starts
+   further down the same schedule (`warnSeconds: 8` broadcasts at 8, 7 … 1) and
+   `warnSeconds: 0` skips the countdown entirely.
+
+   In the message `%s` is replaced with a human-readable remaining time
+   (`5 minutes`, `1 minute`, `30 seconds`, `1 second`) and `%d` with the
+   remaining whole seconds. Announce bodies are built with `jq` so quotes in an
+   operator's message cannot produce invalid JSON.
 4. **Clamp to the budget.** When `SHUTDOWN_GRACE_SECONDS` is > 0 the countdown
    is clamped to `SHUTDOWN_GRACE_SECONDS - 30`, reserving 30s for the save and
    clean shutdown. This bounds the countdown by the pod's real kubelet budget
