@@ -130,6 +130,12 @@ Order of operations:
 The operator sizes `terminationGracePeriodSeconds` to fit the countdown —
 `shutdown.warnSeconds + 300`, so 600s with defaults (spec 02).
 
+The countdown also depends on the game Service publishing not-ready addresses
+(spec 08). The pod is `Terminating` for the entire countdown, and without that
+flag the load balancer drops it seconds in — players receive the first warning
+and are then disconnected, which is the exact outcome the countdown exists to
+prevent.
+
 ## healthcheck.sh (probe backend)
 
 Called as `healthcheck.sh <mode>`:

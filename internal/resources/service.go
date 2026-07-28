@@ -87,6 +87,16 @@ func DesiredGameService(g *palworldv1alpha1.PalworldGame) *corev1.Service {
 			// Preserve client source IP where possible; game servers benefit
 			// from correct client addressing.
 			ExternalTrafficPolicy: externalTrafficPolicy(svcType),
+			// Keep players reachable for the whole preStop shutdown countdown
+			// (spec 07). An endpoint is marked ready=false the moment its pod
+			// starts terminating, whatever the probes say, and with
+			// ExternalTrafficPolicy: Local kube-proxy's healthCheckNodePort counts
+			// only ready local endpoints -- so it returns 503 and the load
+			// balancer withdraws the node. A game is a single-replica StatefulSet,
+			// so there is no second endpoint to hold the health check up and the
+			// VIP vanishes: players get the first "shutting down in 5 minutes"
+			// broadcast and are disconnected moments later.
+			PublishNotReadyAddresses: true,
 		},
 	}
 	if svcType == corev1.ServiceTypeLoadBalancer {
